@@ -455,4 +455,73 @@ public sealed class UseDictionaryTryAddAnalyzerTests
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
     }
 
+    [Fact]
+    public Task ReplacesDefaultTypeOfAndConvertedArguments()
+    {
+        const string source = """
+            using System;
+            using System.Collections.Generic;
+
+            class C
+            {
+                void M(
+                    Dictionary<int, long> numbers,
+                    Dictionary<Type, Type> types,
+                    Dictionary<string, int> values,
+                    string key)
+                {
+                    if (!numbers.{|#0:ContainsKey|}(default)) { numbers.Add(default, 1); }
+                    if (!types.{|#1:ContainsKey|}(typeof(string))) { types.Add(typeof(string), typeof(int)); }
+                    if (!values.{|#2:ContainsKey|}(key)) { values.Add(key, 1); }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System;
+            using System.Collections.Generic;
+
+            class C
+            {
+                void M(
+                    Dictionary<int, long> numbers,
+                    Dictionary<Type, Type> types,
+                    Dictionary<string, int> values,
+                    string key)
+                {
+                    numbers.TryAdd(default, 1);
+                    types.TryAdd(typeof(string), typeof(int));
+                    values.TryAdd(key, 1);
+                }
+            }
+            """;
+
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(UseDictionaryTryAddAnalyzer.DiagnosticId).WithLocation(0),
+            VerifyCS.Diagnostic(UseDictionaryTryAddAnalyzer.DiagnosticId).WithLocation(1),
+            VerifyCS.Diagnostic(UseDictionaryTryAddAnalyzer.DiagnosticId).WithLocation(2),
+        };
+
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
+    [Fact]
+    public Task IgnoresMismatchedReceiverAndKey()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            class C
+            {
+                void M(Dictionary<string, int> first, Dictionary<string, int> second, string key)
+                {
+                    if (!first.ContainsKey(key)) { second.Add(key, 1); }
+                    if (!first.ContainsKey(key)) { first.Add("other", 1); }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
 }

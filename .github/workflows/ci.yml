@@ -112,7 +112,7 @@ jobs:
 
       - name: Enforce line coverage
         env:
-          COVERAGE_THRESHOLD: "89"
+          COVERAGE_THRESHOLD: "91"
         run: |
           set -euo pipefail
           coverage_file="$(find TestResults -type f -name coverage.cobertura.xml -print -quit)"

@@ -228,6 +228,84 @@ public sealed class UseNullConditionalAccessAnalyzerTests
     }
 
     [Fact]
+    public Task ReplacesLocalReceiverFieldAccess()
+    {
+        const string source = """
+            class Value
+            {
+                public int Number;
+            }
+
+            class Example
+            {
+                int? GetNumber(Value? input)
+                {
+                    var value = input;
+                    return value is null {|#0:?|} null : value.Number;
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Value
+            {
+                public int Number;
+            }
+
+            class Example
+            {
+                int? GetNumber(Value? input)
+                {
+                    var value = input;
+                    return value?.Number;
+                }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(UseNullConditionalAccessAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task ReplacesParenthesizedReceiver()
+    {
+        const string source = """
+            class Example
+            {
+                int? GetLength(string? value) => ((value is null)) {|#0:?|} ((null)) : ((value.Length));
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                int? GetLength(string? value) => value?.Length;
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(UseNullConditionalAccessAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task IgnoresExtensionMethodNonNullComparisonAndOrdinaryConditional()
+    {
+        const string source = """
+            static class TextExtensions
+            {
+                public static int CountCharacters(this string value) => value.Length;
+            }
+
+            class Example
+            {
+                int? Extension(string? value) => value is null ? null : value.CountCharacters();
+                int? Comparison(string? first, string? second) => first == second ? null : first.Length;
+                int Ordinary(bool enabled, string value) => enabled ? value.Length : 0;
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
     public Task IgnoresMismatchedAndUnstableReceivers()
     {
         const string source = """

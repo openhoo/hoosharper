@@ -82,6 +82,100 @@ public sealed class RemoveRedundantNullConditionalGuardAnalyzerTests
     }
 
     [Fact]
+    public Task RemovesGuardAroundParenthesizedLocalReceiver()
+    {
+        const string source = """
+            class Service
+            {
+                public void Run() { }
+            }
+
+            class Example
+            {
+                void Invoke(Service? input)
+                {
+                    var service = input;
+                    if (((service)) {|#0:is|} not null)
+                    {
+                        ((service))?.Run();
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Service
+            {
+                public void Run() { }
+            }
+
+            class Example
+            {
+                void Invoke(Service? input)
+                {
+                    var service = input;
+                    ((service))?.Run();
+                }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(RemoveRedundantNullConditionalGuardAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task RemovesGuardAroundReadonlyFieldChain()
+    {
+        const string source = """
+            class Service
+            {
+                public void Run() { }
+            }
+
+            class Holder
+            {
+                public readonly Service? Service;
+            }
+
+            class Example
+            {
+                private readonly Holder holder = new();
+
+                void Invoke()
+                {
+                    if (holder.Service {|#0:is|} not null)
+                    {
+                        holder.Service?.Run();
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Service
+            {
+                public void Run() { }
+            }
+
+            class Holder
+            {
+                public readonly Service? Service;
+            }
+
+            class Example
+            {
+                private readonly Holder holder = new();
+
+                void Invoke()
+                {
+                    holder.Service?.Run();
+                }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(RemoveRedundantNullConditionalGuardAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
     public Task PreservesComments()
     {
         const string source = """

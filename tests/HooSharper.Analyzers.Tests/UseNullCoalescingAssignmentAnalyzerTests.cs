@@ -172,6 +172,140 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
     }
 
     [Fact]
+    public Task ReplacesLocalAndNullableValueTargets()
+    {
+        const string source = """
+            class Example
+            {
+                void Set(string? value, int? number, string fallback)
+                {
+                    string? local = value;
+                    if ((local) {|#0:is|} null)
+                    {
+                        local = fallback;
+                    }
+
+                    int? nullable = number;
+                    if (nullable {|#1:is|} null)
+                    {
+                        nullable = 42;
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Set(string? value, int? number, string fallback)
+                {
+                    string? local = value;
+                    local ??= fallback;
+
+                    int? nullable = number;
+                    nullable ??= 42;
+                }
+            }
+            """;
+
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(0),
+            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(1),
+        };
+
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
+    [Fact]
+    public Task ReplacesStaticAndStableReceiverTargets()
+    {
+        const string source = """
+            class Holder
+            {
+                public string? Value { get; set; }
+            }
+
+            class Example
+            {
+                private static string? shared;
+
+                void Set(Holder parameter, string fallback)
+                {
+                    Holder local = parameter;
+                    if (shared {|#0:is|} null)
+                    {
+                        shared = fallback;
+                    }
+
+                    if ((local).Value {|#1:is|} null)
+                    {
+                        (local).Value = fallback;
+                    }
+
+                    if (parameter.Value {|#2:is|} null)
+                    {
+                        parameter.Value = fallback;
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Holder
+            {
+                public string? Value { get; set; }
+            }
+
+            class Example
+            {
+                private static string? shared;
+
+                void Set(Holder parameter, string fallback)
+                {
+                    Holder local = parameter;
+                    shared ??= fallback;
+
+                    (local).Value ??= fallback;
+
+                    parameter.Value ??= fallback;
+                }
+            }
+            """;
+
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(0),
+            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(1),
+            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(2),
+        };
+
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
+    [Fact]
+    public Task IgnoresElementAccessAndNonNullableTargets()
+    {
+        const string source = """
+            class Example
+            {
+                void Set(string?[] values, int number)
+                {
+                    if (values[0] is null)
+                    {
+                        values[0] = "fallback";
+                    }
+
+                    if (number == null)
+                    {
+                        number = 42;
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
     public Task DoesNotReportBeforeCSharp8()
     {
         const string source = """

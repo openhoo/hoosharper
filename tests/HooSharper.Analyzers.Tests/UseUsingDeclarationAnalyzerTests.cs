@@ -143,6 +143,51 @@ public sealed class UseUsingDeclarationAnalyzerTests
     }
 
     [Fact]
+    public Task ReportsWhenBodyIntroducesDifferentKindsOfNamesWithoutCollision()
+    {
+        const string source = """
+            using System;
+            using System.IO;
+
+            class Example
+            {
+                void Run()
+                {
+                    _ = 0;
+
+                    {|#0:using|} (var stream = new MemoryStream())
+                    {
+                        var local = stream.Length;
+                        if (stream is MemoryStream typed)
+                        {
+                            _ = typed;
+                        }
+
+                        foreach (var item in new[] { local })
+                        {
+                            _ = item;
+                        }
+
+                        try
+                        {
+                            Local();
+                        }
+                        catch (Exception error)
+                        {
+                            _ = error;
+                        }
+
+                        void Local() { }
+                    }
+                }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(UseUsingDeclarationAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyAnalyzerAsync(source, expected);
+    }
+
+    [Fact]
     public Task DoesNotReportDirectivesOrUnsupportedResources()
     {
         const string source = """

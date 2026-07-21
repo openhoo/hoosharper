@@ -19,6 +19,13 @@ internal static class AnalyzerVerifier<TAnalyzer, TCodeFix>
             TestCode = source,
         }.RunAsync(TestContext.Current.CancellationToken);
 
+    public static Task VerifyAnalyzerAsync(string source, DiagnosticResult expected) =>
+        new Test
+        {
+            TestCode = source,
+            ExpectedDiagnostics = { expected },
+        }.RunAsync(TestContext.Current.CancellationToken);
+
     public static Task VerifyCodeFixAsync(
         string source,
         DiagnosticResult expected,
