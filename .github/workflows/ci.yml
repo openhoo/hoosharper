@@ -26,7 +26,7 @@ env:
 jobs:
   commitlint:
     name: Conventional Commits
-    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')
+    if: github.event_name != 'workflow_dispatch' && (github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):'))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -169,3 +169,12 @@ jobs:
           --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}"
           --source https://api.nuget.org/v3/index.json
           --skip-duplicate
+
+      - name: Relist package
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        run: |
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "X-NuGet-ApiKey: $NUGET_API_KEY" \
+            "https://www.nuget.org/api/v2/package/HooSharper.Analyzers/${RELEASE_VERSION}"
