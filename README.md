@@ -14,18 +14,10 @@ The analyzer package targets `netstandard2.0` so it can run in a broad range of 
 
 ## Installation
 
-### Install from GitHub Packages
-
-Releases are published to the OpenHoo GitHub Packages NuGet registry. Authenticate with a GitHub personal access token that has at least `read:packages`, then add the source:
+Install the package directly from [nuget.org](https://www.nuget.org/packages/HooSharper.Analyzers):
 
 ```bash
-dotnet nuget add source https://nuget.pkg.github.com/openhoo/index.json \
-  --name openhoo \
-  --username YOUR_GITHUB_USERNAME \
-  --password YOUR_GITHUB_TOKEN \
-  --store-password-in-clear-text
-
-dotnet add package HooSharper.Analyzers --source openhoo
+dotnet add package HooSharper.Analyzers --version 0.2.1
 ```
 
 For central package management, add the version to `Directory.Packages.props`:
@@ -33,7 +25,7 @@ For central package management, add the version to `Directory.Packages.props`:
 ```xml
 <Project>
   <ItemGroup>
-    <PackageVersion Include="HooSharper.Analyzers" Version="0.2.0" />
+    <PackageVersion Include="HooSharper.Analyzers" Version="0.2.1" />
   </ItemGroup>
 </Project>
 ```
@@ -51,14 +43,12 @@ Without central package management:
 ```xml
 <ItemGroup>
   <PackageReference Include="HooSharper.Analyzers"
-                    Version="0.2.0"
+                    Version="0.2.1"
                     PrivateAssets="all" />
 </ItemGroup>
 ```
 
 `PrivateAssets="all"` prevents an application or library from exposing HooSharper as a transitive runtime dependency. The package contains both the analyzer assembly and its code-fix assembly under `analyzers/dotnet/cs`.
-
-GitHub Packages requires authentication even when the repository is public. Do not commit a personal token to `NuGet.config`; configure credentials in the user-level NuGet configuration or through CI secrets.
 
 ### Install a locally built package
 
@@ -79,7 +69,7 @@ dotnet nuget add source /absolute/path/to/hoosharper/artifacts \
   --name HooSharperLocal
 
 dotnet add package HooSharper.Analyzers \
-  --version 0.2.0 \
+  --version 0.2.1 \
   --source /absolute/path/to/hoosharper/artifacts
 ```
 
@@ -460,7 +450,7 @@ The analyzer assembly is loaded by the compiler and IDE. The code-fix assembly i
 Inspect a locally produced package with:
 
 ```bash
-unzip -l artifacts/HooSharper.Analyzers.0.2.0.nupkg
+unzip -l artifacts/HooSharper.Analyzers.0.2.1.nupkg
 ```
 
 ### Continuous releases
@@ -472,7 +462,7 @@ CI follows the shared OpenHoo release model:
 3. The solution is restored, built, tested, and packed with the SDK pinned in `global.json`.
 4. A successful non-release push to `main` triggers `.github/workflows/release.yml`.
 5. Hooversion calculates the next semantic version, updates `version` and `CHANGELOG.md`, creates a `chore(release):` commit and `v<version>` tag, pushes both, and creates the GitHub Release.
-6. The tagged source is rebuilt and the resulting NuGet package is published to GitHub Packages.
+6. The tagged source is rebuilt and the resulting NuGet package is published to GitHub Packages. The same package can be published to nuget.org through the trusted-publishing job in `.github/workflows/ci.yml`.
 
 Version changes are derived from Conventional Commits:
 
@@ -491,7 +481,7 @@ feat!: rename diagnostic categories
 
 The package version has one source of truth: the repository-root `version` file. `Directory.Build.props` reads it into MSBuild's `VersionPrefix`, and Hooversion owns release-time updates. Do not manually edit `version`, `CHANGELOG.md`, release tags, or release commits for a normal release.
 
-The release workflow uses the repository `GITHUB_TOKEN`; no long-lived package publishing secret is required. Required job permissions are limited to `contents: write` for Hooversion and `packages: write` for NuGet publication.
+The release workflow uses the repository `GITHUB_TOKEN` for GitHub Packages. nuget.org publishing uses OpenID Connect trusted publishing for the `OpenHoo` account, so neither registry requires a long-lived package publishing secret.
 
 To preview a release without creating commits, tags, releases, or packages, run the **Release** workflow manually with `dry_run` enabled. For local inspection, check out the same pinned Hooversion revision used by CI:
 
