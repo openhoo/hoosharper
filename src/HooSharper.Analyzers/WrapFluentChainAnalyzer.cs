@@ -60,8 +60,8 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
         if (GetLastMemberAccess(chain) != memberAccess ||
             !HasStatementOrArrowAncestor(chain) ||
             HasDirective(chain) ||
-            !TryGetChainDots(chain, out var dots) ||
-            dots.Count < 2)
+            !TryGetChainDotCount(chain, out var dotCount) ||
+            dotCount < 2)
         {
             return;
         }
@@ -72,8 +72,9 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var maximumLineLength = GetMaximumLineLength(context);
-        if (GetVisualEndColumn(chain, GetTabWidth(context)) <= maximumLineLength)
+        var options = context.Options.AnalyzerConfigOptionsProvider.GetOptions(context.Node.SyntaxTree);
+        var maximumLineLength = GetMaximumLineLength(options);
+        if (GetVisualEndColumn(chain, GetTabWidth(options)) <= maximumLineLength)
         {
             return;
         }
@@ -94,9 +95,8 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    private static int GetMaximumLineLength(SyntaxNodeAnalysisContext context)
+    private static int GetMaximumLineLength(AnalyzerConfigOptions options)
     {
-        var options = context.Options.AnalyzerConfigOptionsProvider.GetOptions(context.Node.SyntaxTree);
         if (TryGetPositiveInteger(options, MaximumLineLengthOption, out var maximumLineLength) ||
             TryGetPositiveInteger(options, StandardMaximumLineLengthOption, out maximumLineLength))
         {
@@ -106,9 +106,8 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
         return DefaultMaximumLineLength;
     }
 
-    private static int GetTabWidth(SyntaxNodeAnalysisContext context)
+    private static int GetTabWidth(AnalyzerConfigOptions options)
     {
-        var options = context.Options.AnalyzerConfigOptionsProvider.GetOptions(context.Node.SyntaxTree);
         if (TryGetPositiveInteger(options, TabWidthOption, out var tabWidth))
         {
             return tabWidth;
@@ -175,6 +174,34 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
 
             return current;
         }
+    }
+
+    private static bool TryGetChainDotCount(ExpressionSyntax chain, out int count)
+    {
+        count = 0;
+        ExpressionSyntax? current = chain;
+        while (current is not null)
+        {
+            switch (current)
+            {
+                case InvocationExpressionSyntax invocation:
+                    current = invocation.Expression;
+                    break;
+                case MemberAccessExpressionSyntax memberAccess
+                    when memberAccess.IsKind(SyntaxKind.SimpleMemberAccessExpression):
+                    count++;
+                    current = memberAccess.Expression;
+                    break;
+                case ConditionalAccessExpressionSyntax:
+                    count = 0;
+                    return false;
+                default:
+                    current = null;
+                    break;
+            }
+        }
+
+        return true;
     }
 
     internal static bool TryGetChainDots(ExpressionSyntax chain, out IReadOnlyList<SyntaxToken> dots)

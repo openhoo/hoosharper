@@ -1,8 +1,7 @@
 using System;
-using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Collections.Generic;
 using System.Composition;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using HooSharper.Analyzers;
@@ -25,9 +24,11 @@ public sealed class WrapFluentChainCodeFixProvider : CodeFixProvider
     {
         var root = await context.Document.GetSyntaxRootAsync(context.CancellationToken).ConfigureAwait(false);
         var diagnostic = context.Diagnostics[0];
-        var expression = root?.FindNode(diagnostic.Location.SourceSpan, getInnermostNodeForTie: true)
-            .AncestorsAndSelf().OfType<ExpressionSyntax>()
-            .FirstOrDefault(node => node.Span == diagnostic.Location.SourceSpan);
+        var expression = root?.FindNode(diagnostic.Location.SourceSpan, getInnermostNodeForTie: true) as ExpressionSyntax;
+        while (expression is not null && expression.Span != diagnostic.Location.SourceSpan)
+        {
+            expression = expression.Parent as ExpressionSyntax;
+        }
         if (expression is null)
         {
             return;
@@ -59,25 +60,26 @@ public sealed class WrapFluentChainCodeFixProvider : CodeFixProvider
 
         var indentation = GetIndentation(containingNode, sourceText) + GetContinuationIndentation(document, expression.SyntaxTree);
         var endOfLine = DetectEndOfLine(sourceText);
-        var replacements = new Dictionary<SyntaxToken, SyntaxToken>();
-        foreach (var dot in dots)
+        var endOfLineTrivia = SyntaxFactory.EndOfLine(endOfLine);
+        var indentationTrivia = SyntaxFactory.Whitespace(indentation);
+        var replacementDots = new SyntaxToken[dots.Count];
+        for (var index = 0; index < dots.Count; index++)
         {
+            var dot = dots[index];
             var leadingTrivia = dot.LeadingTrivia;
             if (ContainsEndOfLine(leadingTrivia))
             {
                 return document;
             }
 
-            replacements.Add(
-                dot,
-                dot.WithLeadingTrivia(
-                    leadingTrivia.Insert(0, SyntaxFactory.Whitespace(indentation))
-                        .Insert(0, SyntaxFactory.EndOfLine(endOfLine))));
+            replacementDots[index] = dot.WithLeadingTrivia(
+                leadingTrivia.Insert(0, indentationTrivia).Insert(0, endOfLineTrivia));
         }
 
+        var dotIndex = 0;
         var updatedExpression = expression.ReplaceTokens(
-            replacements.Keys,
-            (original, _) => replacements[original]);
+            dots,
+            (_, _) => replacementDots[dotIndex++]);
         return document.WithSyntaxRoot(root.ReplaceNode(expression, updatedExpression));
     }
 
