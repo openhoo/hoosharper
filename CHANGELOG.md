@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 (2026-07-21)
+
+### Bug Fixes
+
+- **analyzers:** preserve transformation semantics (6f30085)
+
 ## 0.2.0 (2026-07-21)
 
 ### Features
