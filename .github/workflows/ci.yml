@@ -176,5 +176,6 @@ jobs:
         run: |
           curl --fail-with-body --silent --show-error \
             --request POST \
+            --header "Content-Length: 0" \
             --header "X-NuGet-ApiKey: $NUGET_API_KEY" \
             "https://www.nuget.org/api/v2/package/HooSharper.Analyzers/${RELEASE_VERSION}"
