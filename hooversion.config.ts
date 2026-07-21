@@ -11,6 +11,9 @@ export default {
       dependencies: [],
     },
   ],
+  hooks: {
+    afterVersion: ["bun run sync-readme-version"],
+  },
   github: {
     releases: true,
   },

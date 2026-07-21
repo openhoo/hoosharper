@@ -3,7 +3,9 @@
   "private": true,
   "scripts": {
     "commitlint": "commitlint",
-    "prepare": "husky"
+    "prepare": "husky",
+    "sync-readme-version": "bun scripts/sync-readme-version.ts",
+    "check-readme-version": "bun scripts/sync-readme-version.ts --check"
   },
   "devDependencies": {
     "@commitlint/cli": "21.2.1",
