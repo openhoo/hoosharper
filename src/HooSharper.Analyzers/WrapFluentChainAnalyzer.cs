@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -204,35 +203,6 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
         return true;
     }
 
-    internal static bool TryGetChainDots(ExpressionSyntax chain, out IReadOnlyList<SyntaxToken> dots)
-    {
-        var result = new List<SyntaxToken>();
-        ExpressionSyntax? current = chain;
-        while (current is not null)
-        {
-            switch (current)
-            {
-                case InvocationExpressionSyntax invocation:
-                    current = invocation.Expression;
-                    break;
-                case MemberAccessExpressionSyntax memberAccess
-                    when memberAccess.IsKind(SyntaxKind.SimpleMemberAccessExpression):
-                    result.Add(memberAccess.OperatorToken);
-                    current = memberAccess.Expression;
-                    break;
-                case ConditionalAccessExpressionSyntax:
-                    dots = [];
-                    return false;
-                default:
-                    current = null;
-                    break;
-            }
-        }
-
-        result.Reverse();
-        dots = result;
-        return true;
-    }
 
     private static MemberAccessExpressionSyntax? GetLastMemberAccess(ExpressionSyntax chain) =>
         chain switch
