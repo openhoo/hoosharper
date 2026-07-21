@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.2 (2026-07-21)
+
+### Other Changes
+
+- publish releases to nuget.org (4a8f23e)
+- add manual nuget publisher (5f36788)
+- align nuget trusted workflow (ae08004)
+- relist nuget publications (13d7862)
+- install from nuget.org (3aec42a)
+
+### Bug Fixes
+
+- **ci:** send empty relist body (4c44152)
+
 ## 0.2.1 (2026-07-21)
 
 ### Bug Fixes
