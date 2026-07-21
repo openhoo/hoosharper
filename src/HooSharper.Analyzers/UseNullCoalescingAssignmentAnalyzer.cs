@@ -32,6 +32,11 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
 
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
     {
+        if (context.Node.SyntaxTree.Options is not CSharpParseOptions { LanguageVersion: >= LanguageVersion.CSharp8 })
+        {
+            return;
+        }
+
         var ifStatement = (IfStatementSyntax)context.Node;
         if (ifStatement.Else is not null ||
             ifStatement.Statement is not BlockSyntax { Statements.Count: 1 } block ||

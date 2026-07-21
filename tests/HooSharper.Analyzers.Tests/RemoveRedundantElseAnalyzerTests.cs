@@ -196,6 +196,118 @@ public sealed class RemoveRedundantElseAnalyzerTests
     }
 
     [Fact]
+    public Task PreservesUsingDeclarationDisposalScope()
+    {
+        const string source = """
+            using System;
+
+            class Example
+            {
+                void Run(bool done)
+                {
+                    if (done)
+                    {
+                        return;
+                    }
+                    {|#0:else|}
+                    {
+                        // dispose before Finish
+                        using var resource = new Resource();
+                        Execute(resource);
+                    }
+
+                    Finish();
+                }
+
+                void Execute(Resource resource) { }
+                void Finish() { }
+
+                sealed class Resource : IDisposable
+                {
+                    public void Dispose() { }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System;
+
+            class Example
+            {
+                void Run(bool done)
+                {
+                    if (done)
+                    {
+                        return;
+                    }
+                    {
+                        // dispose before Finish
+                        using var resource = new Resource();
+                        Execute(resource);
+                    }
+
+                    Finish();
+                }
+
+                void Execute(Resource resource) { }
+                void Finish() { }
+
+                sealed class Resource : IDisposable
+                {
+                    public void Dispose() { }
+                }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(RemoveRedundantElseAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task PreservesScopeForBranchLocalNameCollision()
+    {
+        const string source = """
+            class Example
+            {
+                int GetValue(bool done)
+                {
+                    if (done)
+                    {
+                        var value = 1;
+                        return value;
+                    }
+                    {|#0:else|}
+                    {
+                        // separate declaration space
+                        var value = 0;
+                        return value;
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                int GetValue(bool done)
+                {
+                    if (done)
+                    {
+                        var value = 1;
+                        return value;
+                    }
+                    {
+                        // separate declaration space
+                        var value = 0;
+                        return value;
+                    }
+                }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(RemoveRedundantElseAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
     public Task DoesNotReportNonterminatingBranch()
     {
         const string source = """

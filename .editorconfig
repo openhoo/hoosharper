@@ -12,6 +12,15 @@ trim_trailing_whitespace = true
 indent_size = 2
 
 [*.cs]
-dotnet_sort_system_directives_first = true
+dotnet_sort_system_directives_first = false
 csharp_style_namespace_declarations = file_scoped:warning
 csharp_prefer_braces = false:warning
+csharp_new_line_before_open_brace = none
+csharp_indent_case_contents = true
+csharp_indent_switch_labels = true
+csharp_indent_case_contents_when_block = true
+csharp_preserve_single_line_statements = false
+csharp_preserve_single_line_blocks = false
+csharp_space_before_colon_in_inheritance_clause = false
+max_line_length = 140
+hoosharper_max_line_length = 140

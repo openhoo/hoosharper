@@ -1,3 +1,8 @@
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Testing;
+using Microsoft.CodeAnalysis.Testing;
+
 using HooSharper.CodeFixes;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
     HooSharper.Analyzers.UseTypePatternAnalyzer,
@@ -165,6 +170,42 @@ public sealed class UseTypePatternAnalyzerTests
             """;
 
         return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task DoesNotReportBeforeCSharp7()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(object value)
+                {
+                    var text = value as string;
+                    if (text != null)
+                    {
+                        System.Console.WriteLine(text.Length);
+                    }
+                }
+            }
+            """;
+
+        var test = new CSharpCodeFixTest<
+            UseTypePatternAnalyzer,
+            UseTypePatternCodeFixProvider,
+            DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+        };
+        test.SolutionTransforms.Add((solution, projectId) =>
+        {
+            var project = solution.GetProject(projectId)!;
+            return solution.WithProjectParseOptions(
+                projectId,
+                ((CSharpParseOptions)project.ParseOptions!).WithLanguageVersion(LanguageVersion.CSharp6));
+        });
+
+        return test.RunAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]

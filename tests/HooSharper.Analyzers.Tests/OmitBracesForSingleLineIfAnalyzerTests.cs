@@ -178,6 +178,99 @@ public sealed class OmitBracesForSingleLineIfAnalyzerTests
     }
 
     [Fact]
+    public Task KeepsBracesWhenOutVariableWouldCollideWithLaterDeclaration()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled, bool other)
+                {
+                    if (enabled)
+                    {
+                        TryGet(out var value);
+                    }
+
+                    if (other)
+                    {
+                        int value = 0;
+                        Use(value);
+                    }
+                }
+
+                bool TryGet(out int value) { value = 0; return true; }
+                void Use(int value) { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task KeepsBracesWhenPatternVariableWouldCollideWithLaterDeclaration()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled, bool other, object item)
+                {
+                    if (enabled)
+                    {
+                        Use(item is int value);
+                    }
+
+                    if (other)
+                    {
+                        int value = 0;
+                        Use(value > 0);
+                    }
+                }
+
+                void Use(bool value) { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task PreservesCommentsAttachedToBraceTokens()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    if (enabled)
+                    {|#0:{|} // opening brace
+                        Execute();
+                    // closing brace
+                    } // after closing brace
+                }
+
+                void Execute() { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    if (enabled)
+                        // opening brace
+                        Execute();
+                    // closing brace
+                    // after closing brace
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(OmitBracesForSingleLineIfAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
     public Task KeepsBracesForMultipleStatements()
     {
         const string source = """

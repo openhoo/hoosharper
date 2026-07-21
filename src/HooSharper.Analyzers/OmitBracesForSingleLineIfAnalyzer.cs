@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -50,12 +52,50 @@ public sealed class OmitBracesForSingleLineIfAnalyzer : DiagnosticAnalyzer
         var nestedStatement = block.Statements[0];
         if (nestedStatement is LocalDeclarationStatementSyntax or LocalFunctionStatementSyntax ||
             hasFollowingElse && nestedStatement is IfStatementSyntax { Else: null } ||
-            HasDirective(block))
+            HasDirective(block) ||
+            HasExpandedScopeCollision(block, nestedStatement))
         {
             return;
         }
 
         context.ReportDiagnostic(Diagnostic.Create(Rule, block.OpenBraceToken.GetLocation()));
+    }
+
+    private static bool HasExpandedScopeCollision(BlockSyntax block, StatementSyntax nestedStatement)
+    {
+        var introducedNames = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (var designation in nestedStatement.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>())
+        {
+            if (!designation.Identifier.IsKind(SyntaxKind.UnderscoreToken))
+            {
+                introducedNames.Add(designation.Identifier.ValueText);
+            }
+        }
+
+        if (introducedNames.Count == 0)
+        {
+            return false;
+        }
+
+        var containingStatement = block.Ancestors().OfType<StatementSyntax>().FirstOrDefault();
+        if (containingStatement?.Parent is not BlockSyntax parentBlock)
+        {
+            return true;
+        }
+
+        var statementIndex = parentBlock.Statements.IndexOf(containingStatement);
+        for (var index = statementIndex + 1; index < parentBlock.Statements.Count; index++)
+        {
+            foreach (var token in parentBlock.Statements[index].DescendantTokens())
+            {
+                if (token.IsKind(SyntaxKind.IdentifierToken) && introducedNames.Contains(token.ValueText))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static bool HasDirective(BlockSyntax block)

@@ -230,6 +230,165 @@ public sealed class PreferLoopContinueAnalyzerTests
     }
 
     [Fact]
+    public Task DoesNotReportWhenEarlierNestedDeclarationWouldCollide()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    for (;;)
+                    {
+                        {
+                            var value = 1;
+                            _ = value;
+                        }
+
+                        if (enabled)
+                        {
+                            var value = 2;
+                            _ = value;
+                        }
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task DoesNotReportWhenEarlierDesignationWouldCollide()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled, object item)
+                {
+                    while (enabled)
+                    {
+                        {
+                            if (item is int value)
+                            {
+                                _ = value;
+                            }
+                        }
+
+                        if (enabled)
+                        {
+                            var value = 2;
+                            _ = value;
+                        }
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task DoesNotReportWhenMovedDesignationWouldCollide()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled, object item)
+                {
+                    while (enabled)
+                    {
+                        {
+                            var value = 1;
+                            _ = value;
+                        }
+
+                        if (enabled)
+                        {
+                            if (item is int value)
+                            {
+                                _ = value;
+                            }
+                        }
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task DoesNotReportWhenEarlierLocalFunctionWouldCollide()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    do
+                    {
+                        {
+                            void Work() { }
+                            Work();
+                        }
+
+                        if (enabled)
+                        {
+                            void Work() { }
+                            Work();
+                        }
+                    }
+                    while (enabled);
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task PreservesCommentsInHeaderAndBraceGaps()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    for (;;)
+                    {
+                        {|#0:if|} /* before condition */ (enabled) // before brace
+                        { // after brace
+                            Execute();
+                        }
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    for (;;)
+                    {
+                        if /* before condition */ (!enabled) // before brace
+                            continue;
+                        // after brace
+                        Execute();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(PreferLoopContinueAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
     public Task FixAllConvertsEveryEligibleLoop()
     {
         const string source = """
@@ -334,6 +493,36 @@ public sealed class PreferLoopContinueAnalyzerTests
 
         var expected = VerifyCS.Diagnostic(PreferLoopContinueAnalyzer.DiagnosticId).WithLocation(0);
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task DoesNotReportCustomConditionWithTrueAndFalseOperatorsButNoLogicalNot()
+    {
+        const string source = """
+            readonly struct Truthy
+            {
+                public static bool operator true(Truthy value) => true;
+                public static bool operator false(Truthy value) => false;
+            }
+
+            class Example
+            {
+                void Run(Truthy condition)
+                {
+                    for (;;)
+                    {
+                        if (condition)
+                        {
+                            Execute();
+                        }
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
     }
 
 }

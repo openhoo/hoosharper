@@ -304,7 +304,7 @@ csharp_prefer_braces = false:warning
 
 HOO1002 remains independently configurable through `dotnet_diagnostic.HOO1002.severity`. The built-in option and HooSharper rule may both report in hosts that enable both analyzers. Disable one diagnostic if duplicate suggestions appear.
 
-### HOO1003-HOO1009: Additional automatic fixes
+### HOO1003-HOO1020: Additional automatic fixes
 
 All rules below use category `HooSharper.CodeStyle`, default to Info severity, are enabled by default, and support Fix All.
 
@@ -317,8 +317,40 @@ All rules below use category `HooSharper.CodeStyle`, default to Info severity, a
 | `HOO1007` | Replace `ContainsKey` plus index access with `TryGetValue` | `map.ContainsKey(key)` and `map[key]` → `map.TryGetValue(key, out var value)` |
 | `HOO1008` | Replace a null check and assignment with `??=` | `if (cache is null) cache = Create();` → `cache ??= Create();` |
 | `HOO1009` | Replace a classic argument null guard with `ThrowIfNull` | `if (value is null) throw new ArgumentNullException(nameof(value));` → `ArgumentNullException.ThrowIfNull(value);` |
+| `HOO1010` | Merge nested `if` statements | `if (a) { if (b) Work(); }` → `if (a && b) Work();` |
+| `HOO1011` | Use `Dictionary.TryAdd` | `if (!map.ContainsKey(k)) map.Add(k, v);` → `map.TryAdd(k, v);` |
+| `HOO1012` | Use the result of `HashSet.Add` | `if (!set.Contains(v)) { set.Add(v); Work(); }` → `if (set.Add(v)) Work();` |
+| `HOO1013` | Use a terminal using declaration | `using (var x = Open()) { Work(x); }` → `using var x = Open(); Work(x);` |
+| `HOO1014` | Use a null-coalescing expression | `x is null ? fallback : x` → `x ?? fallback` |
+| `HOO1015` | Use null-conditional access | `x is null ? null : x.Value` → `x?.Value` |
+| `HOO1016` | Use `string.Contains` for a presence test | `text.IndexOf(value) >= 0` → `text.Contains(value)` |
+| `HOO1017` | Simplify opposite boolean returns | `if (ready) return true; return false;` → `return ready;` |
+| `HOO1018` | Remove a redundant guard around `?.` | `if (x is not null) x?.Run();` → `x?.Run();` |
+| `HOO1019` | Use a `not` pattern | `!(x is string)` → `x is not string` |
+| `HOO1020` | Wrap long fluent chains | Place every continuation `.` at the start of its own line. |
 
-The analyzers deliberately skip ambiguous transformations, including overloaded equality operators, nullable boolean comparisons, unstable expressions with side effects, directive-containing regions, mismatched symbols, and unavailable framework APIs. `HOO1007` is limited to standard `Dictionary<TKey, TValue>`/`IDictionary<TKey, TValue>` semantics; `HOO1009` only activates when `ArgumentNullException.ThrowIfNull` exists in the target compilation.
+The analyzers deliberately skip ambiguous transformations, including overloaded equality operators, nullable boolean comparisons, unstable expressions with side effects, directive-containing regions, mismatched symbols, changed disposal scope, unavailable framework APIs, unsupported C# language versions, expression-tree-incompatible syntax, scope-expanding declaration collisions, dictionary indexer writes/by-reference uses, and collection arguments that comparer callbacks could mutate. Dictionary and set rules are restricted to standard framework types and callback-stable receivers, keys, and values.
+
+#### Fluent-chain line length
+
+`HOO1020` reports a single-line fluent chain whose visual end column exceeds 140 characters and fixes it with leading continuation dots. Tabs, `tab_width`, `indent_style`, `indent_size`, CRLF line endings, and Unicode surrogate pairs are accounted for:
+
+```csharp
+var result = source
+    .Where(IsValid)
+    .Select(Convert)
+    .ToArray();
+```
+
+Configure the limit in `.editorconfig`. The HooSharper-specific key takes precedence over the standard key:
+
+```ini
+[*.cs]
+max_line_length = 140
+hoosharper_max_line_length = 140
+```
+
+Conditional-access chains, directive-containing expressions, and chains that are already multiline are not rewritten.
 
 Configure any rule independently:
 

@@ -82,6 +82,18 @@ public sealed class RemoveRedundantElseCodeFixProvider : CodeFixProvider
         var statementWithoutElse = ifStatement.WithElse(null)
             .WithAdditionalAnnotations(Formatter.Annotation);
 
+        if (elseClause.Statement is BlockSyntax scopedBlock && RequiresPreservedScope(scopedBlock))
+        {
+            var elseTrivia = SignificantTrivia(elseClause.ElseKeyword.LeadingTrivia)
+                .AddRange(SignificantTrivia(elseClause.ElseKeyword.TrailingTrivia));
+            var preservedBlock = scopedBlock
+                .WithLeadingTrivia(WithLineBreaks(elseTrivia, addInitialLineBreak: false)
+                    .AddRange(scopedBlock.GetLeadingTrivia()))
+                .WithAdditionalAnnotations(Formatter.Annotation);
+
+            return [statementWithoutElse, preservedBlock];
+        }
+
         var movedStatements = elseClause.Statement is BlockSyntax block
             ? block.Statements.ToList()
             : [elseClause.Statement];
@@ -119,6 +131,12 @@ public sealed class RemoveRedundantElseCodeFixProvider : CodeFixProvider
         replacements.AddRange(movedStatements);
         return replacements;
     }
+
+    private static bool RequiresPreservedScope(BlockSyntax block) =>
+        block.Statements.Any(statement =>
+            statement is LocalDeclarationStatementSyntax or LocalFunctionStatementSyntax ||
+            statement.DescendantNodes().Any(node =>
+                node is DeclarationExpressionSyntax or SingleVariableDesignationSyntax));
 
     private static SyntaxTriviaList SignificantTrivia(SyntaxTriviaList trivia) =>
         SyntaxFactory.TriviaList(trivia.Where(item =>

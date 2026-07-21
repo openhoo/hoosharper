@@ -1,3 +1,8 @@
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Testing;
+using Microsoft.CodeAnalysis.Testing;
+
 using HooSharper.CodeFixes;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
     HooSharper.Analyzers.UseNullCoalescingAssignmentAnalyzer,
@@ -164,6 +169,41 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
         };
 
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
+    [Fact]
+    public Task DoesNotReportBeforeCSharp8()
+    {
+        const string source = """
+            class Example
+            {
+                void Set(string value, string fallback)
+                {
+                    if (value == null)
+                    {
+                        value = fallback;
+                    }
+                }
+            }
+            """;
+
+        var test = new CSharpCodeFixTest<
+            UseNullCoalescingAssignmentAnalyzer,
+            UseNullCoalescingAssignmentCodeFixProvider,
+            DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+        };
+        test.SolutionTransforms.Add((solution, projectId) =>
+        {
+            var project = solution.GetProject(projectId)!;
+            return solution.WithProjectParseOptions(
+                projectId,
+                ((CSharpParseOptions)project.ParseOptions!).WithLanguageVersion(LanguageVersion.CSharp7_3));
+        });
+
+        return test.RunAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]

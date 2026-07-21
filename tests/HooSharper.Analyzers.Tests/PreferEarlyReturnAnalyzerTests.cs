@@ -204,4 +204,179 @@ public sealed class PreferEarlyReturnAnalyzerTests
 
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
+    [Fact]
+    public Task DoesNotReportWhenMovedLocalCollidesWithSiblingNestedLocal()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    {
+                        var value = 1;
+                        Use(value);
+                    }
+
+                    if (enabled)
+                    {
+                        var value = 2;
+                        Use(value);
+                    }
+                }
+
+                void Use(int value) { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task DoesNotReportWhenMovedPatternDesignationCollidesWithSiblingNestedLocal()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled, object input)
+                {
+                    {
+                        var value = 1;
+                        Use(value);
+                    }
+
+                    if (enabled)
+                    {
+                        if (input is int value)
+                        {
+                            Use(value);
+                        }
+                    }
+                }
+
+                void Use(int value) { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task DoesNotReportWhenMovedOutDesignationCollidesWithSiblingNestedLocal()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled, string input)
+                {
+                    {
+                        var value = 1;
+                        Use(value);
+                    }
+
+                    if (enabled)
+                    {
+                        if (int.TryParse(input, out var value))
+                        {
+                            Use(value);
+                        }
+                    }
+                }
+
+                void Use(int value) { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task DoesNotReportWhenMovedLocalFunctionCollidesWithSiblingNestedLocalFunction()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    {
+                        void Work() { }
+                        Work();
+                    }
+
+                    if (enabled)
+                    {
+                        void Work() { }
+                        Work();
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task PreservesClosingBraceAndTrailingComments()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    {|#0:if|} (enabled)
+                    {
+                        Execute();
+                        // closing brace comment
+                    } // trailing if comment
+                }
+
+                void Execute() { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    if (!enabled)
+                        return;
+                    Execute();
+                    // closing brace comment
+                    // trailing if comment
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(PreferEarlyReturnAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task DoesNotReportCustomConditionWithTrueAndFalseOperatorsButNoLogicalNot()
+    {
+        const string source = """
+            readonly struct Truthy
+            {
+                public static bool operator true(Truthy value) => true;
+                public static bool operator false(Truthy value) => false;
+            }
+
+            class Example
+            {
+                void Run(Truthy condition)
+                {
+                    if (condition)
+                    {
+                        Execute();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
 }

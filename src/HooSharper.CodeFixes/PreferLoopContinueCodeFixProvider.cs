@@ -47,11 +47,16 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
         if (root is null ||
+            semanticModel is null ||
+            semanticModel.GetTypeInfo(ifStatement.Condition, cancellationToken).Type?.SpecialType !=
+                SpecialType.System_Boolean ||
             ifStatement.Statement is not BlockSyntax body ||
             body.Statements.Count == 0 ||
             ifStatement.ContainsDirectives ||
-            ifStatement.Parent is not BlockSyntax parentBlock)
+            ifStatement.Parent is not BlockSyntax parentBlock ||
+            HasBindingCollision(ifStatement, parentBlock, body))
         {
             return document;
         }
@@ -61,7 +66,9 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
         var guard = SyntaxFactory.IfStatement(
                 negatedCondition,
                 SyntaxFactory.ContinueStatement())
-            .WithLeadingTrivia(ifStatement.GetLeadingTrivia());
+            .WithIfKeyword(ifStatement.IfKeyword)
+            .WithOpenParenToken(ifStatement.OpenParenToken)
+            .WithCloseParenToken(ifStatement.CloseParenToken);
 
         var movedStatements = body.Statements.ToList();
         PreserveSignificantTrivia(body, ifStatement, movedStatements);
@@ -81,13 +88,68 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
 
         return document.WithSyntaxRoot(root.ReplaceNode(parentBlock, newParentBlock));
     }
+    private static bool HasBindingCollision(
+        IfStatementSyntax ifStatement,
+        BlockSyntax parentBlock,
+        BlockSyntax body)
+    {
+        var introducedNames = CollectDeclaredNames(body);
+        if (introducedNames.Count == 0)
+        {
+            return false;
+        }
+
+        var ifIndex = parentBlock.Statements.IndexOf(ifStatement);
+        for (var index = 0; index < ifIndex; index++)
+        {
+            foreach (var name in CollectDeclaredNames(parentBlock.Statements[index]))
+            {
+                if (introducedNames.Contains(name))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static HashSet<string> CollectDeclaredNames(SyntaxNode scope)
+    {
+        var names = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (var node in scope.DescendantNodes())
+        {
+            switch (node)
+            {
+                case VariableDeclaratorSyntax declarator:
+                    names.Add(declarator.Identifier.ValueText);
+                    break;
+                case SingleVariableDesignationSyntax designation:
+                    names.Add(designation.Identifier.ValueText);
+                    break;
+                case ForEachStatementSyntax forEachStatement:
+                    names.Add(forEachStatement.Identifier.ValueText);
+                    break;
+                case CatchDeclarationSyntax catchDeclaration:
+                    names.Add(catchDeclaration.Identifier.ValueText);
+                    break;
+                case LocalFunctionStatementSyntax localFunction:
+                    names.Add(localFunction.Identifier.ValueText);
+                    break;
+            }
+        }
+
+        return names;
+    }
+
 
     private static void PreserveSignificantTrivia(
         BlockSyntax body,
         IfStatementSyntax ifStatement,
         List<StatementSyntax> statements)
     {
-        var openingTrivia = body.OpenBraceToken.TrailingTrivia;
+        var openingTrivia = body.OpenBraceToken.LeadingTrivia
+            .AddRange(body.OpenBraceToken.TrailingTrivia);
         if (HasSignificantTrivia(openingTrivia))
         {
             statements[0] = statements[0].WithLeadingTrivia(openingTrivia.AddRange(statements[0].GetLeadingTrivia()));

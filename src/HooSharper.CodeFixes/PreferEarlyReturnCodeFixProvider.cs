@@ -48,7 +48,14 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-        if (root is null || ifStatement.Statement is not BlockSyntax body || ifStatement.Parent is not BlockSyntax parentBlock)
+        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+        if (root is null ||
+            semanticModel is null ||
+            semanticModel.GetTypeInfo(ifStatement.Condition, cancellationToken).Type?.SpecialType !=
+                SpecialType.System_Boolean ||
+            ifStatement.Statement is not BlockSyntax body ||
+            ifStatement.Parent is not BlockSyntax parentBlock ||
+            HasScopeCollision(ifStatement, parentBlock, body))
         {
             return document;
         }
@@ -60,16 +67,124 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
                 SyntaxFactory.ReturnStatement())
             .WithLeadingTrivia(ifStatement.GetLeadingTrivia());
 
+        var movedStatements = body.Statements.ToList();
+        PreserveSignificantTrivia(body, ifStatement, movedStatements);
+
         var replacementStatements = new List<StatementSyntax> { guard };
-        replacementStatements.AddRange(body.Statements);
+        replacementStatements.AddRange(movedStatements);
 
         var index = parentBlock.Statements.IndexOf(ifStatement);
+        if (index < 0)
+        {
+            return document;
+        }
         var newParentBlock = parentBlock.WithStatements(
                 parentBlock.Statements.RemoveAt(index).InsertRange(index, replacementStatements))
             .WithAdditionalAnnotations(Formatter.Annotation);
 
         return document.WithSyntaxRoot(root.ReplaceNode(parentBlock, newParentBlock));
     }
+
+    private static bool HasScopeCollision(
+        IfStatementSyntax ifStatement,
+        BlockSyntax parentBlock,
+        BlockSyntax body)
+    {
+        var movedNames = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var statement in body.Statements)
+        {
+            switch (statement)
+            {
+                case LocalDeclarationStatementSyntax declaration:
+                    foreach (var variable in declaration.Declaration.Variables)
+                    {
+                        movedNames.Add(variable.Identifier.ValueText);
+                    }
+
+                    break;
+                case LocalFunctionStatementSyntax localFunction:
+                    movedNames.Add(localFunction.Identifier.ValueText);
+                    break;
+            }
+
+            foreach (var designation in statement.DescendantNodes(ShouldDescendInto)
+                         .OfType<SingleVariableDesignationSyntax>()
+                         .Where(designation => designation.Ancestors().OfType<BlockSyntax>().FirstOrDefault() == body))
+            {
+                movedNames.Add(designation.Identifier.ValueText);
+            }
+        }
+
+        if (movedNames.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var statement in parentBlock.Statements)
+        {
+            if (statement == ifStatement)
+            {
+                continue;
+            }
+
+            foreach (var node in statement.DescendantNodesAndSelf(ShouldDescendInto))
+            {
+                var name = node switch
+                {
+                    VariableDeclaratorSyntax variable => variable.Identifier.ValueText,
+                    SingleVariableDesignationSyntax designation => designation.Identifier.ValueText,
+                    ForEachStatementSyntax forEachStatement => forEachStatement.Identifier.ValueText,
+                    CatchDeclarationSyntax catchDeclaration => catchDeclaration.Identifier.ValueText,
+                    LocalFunctionStatementSyntax localFunction => localFunction.Identifier.ValueText,
+                    _ => null,
+                };
+
+                if (name is not null && movedNames.Contains(name))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ShouldDescendInto(SyntaxNode node) =>
+        node is not AnonymousFunctionExpressionSyntax and
+        not LocalFunctionStatementSyntax and
+        not TypeDeclarationSyntax;
+
+    private static void PreserveSignificantTrivia(
+        BlockSyntax body,
+        IfStatementSyntax ifStatement,
+        List<StatementSyntax> statements)
+    {
+        var openingTrivia = body.OpenBraceToken.LeadingTrivia.AddRange(body.OpenBraceToken.TrailingTrivia);
+        if (HasSignificantTrivia(openingTrivia))
+        {
+            statements[0] = statements[0].WithLeadingTrivia(openingTrivia.AddRange(statements[0].GetLeadingTrivia()));
+        }
+
+        var closingTrivia = body.CloseBraceToken.LeadingTrivia;
+        if (HasSignificantTrivia(closingTrivia))
+        {
+            var last = statements.Count - 1;
+            statements[last] = statements[last].WithTrailingTrivia(
+                statements[last].GetTrailingTrivia().AddRange(closingTrivia));
+        }
+
+        var trailingTrivia = ifStatement.GetTrailingTrivia();
+        if (HasSignificantTrivia(trailingTrivia))
+        {
+            var last = statements.Count - 1;
+            statements[last] = statements[last].WithTrailingTrivia(
+                statements[last].GetTrailingTrivia().AddRange(trailingTrivia));
+        }
+    }
+
+    private static bool HasSignificantTrivia(SyntaxTriviaList trivia) =>
+        trivia.Any(item => !item.IsKind(SyntaxKind.WhitespaceTrivia) && !item.IsKind(SyntaxKind.EndOfLineTrivia));
 
     private static ExpressionSyntax Negate(ExpressionSyntax condition)
     {

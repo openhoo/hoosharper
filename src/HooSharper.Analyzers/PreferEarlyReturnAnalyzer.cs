@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -37,17 +40,104 @@ public sealed class PreferEarlyReturnAnalyzer : DiagnosticAnalyzer
             return;
         }
 
+        if (context.SemanticModel.GetTypeInfo(ifStatement.Condition, context.CancellationToken).Type?.SpecialType !=
+            SpecialType.System_Boolean)
+        {
+            return;
+        }
+
         if (ifStatement.Parent is not BlockSyntax parentBlock || parentBlock.Statements.LastOrDefault() != ifStatement)
         {
             return;
         }
 
         if (parentBlock.Parent is not MethodDeclarationSyntax method || !method.ReturnType.IsKind(SyntaxKind.PredefinedType) ||
-            !((PredefinedTypeSyntax)method.ReturnType).Keyword.IsKind(SyntaxKind.VoidKeyword))
+            !((PredefinedTypeSyntax)method.ReturnType).Keyword.IsKind(SyntaxKind.VoidKeyword) ||
+            HasScopeCollision(ifStatement, parentBlock, block))
         {
             return;
         }
 
         context.ReportDiagnostic(Diagnostic.Create(Rule, ifStatement.IfKeyword.GetLocation()));
     }
+
+    private static bool HasScopeCollision(
+        IfStatementSyntax ifStatement,
+        BlockSyntax parentBlock,
+        BlockSyntax body)
+    {
+        var movedNames = new HashSet<string>(StringComparer.Ordinal);
+        var movedLabels = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var statement in body.Statements)
+        {
+            switch (statement)
+            {
+                case LocalDeclarationStatementSyntax declaration:
+                    foreach (var variable in declaration.Declaration.Variables)
+                    {
+                        movedNames.Add(variable.Identifier.ValueText);
+                    }
+
+                    break;
+                case LocalFunctionStatementSyntax localFunction:
+                    movedNames.Add(localFunction.Identifier.ValueText);
+                    break;
+                case LabeledStatementSyntax labeledStatement:
+                    movedLabels.Add(labeledStatement.Identifier.ValueText);
+                    break;
+            }
+
+            foreach (var designation in statement.DescendantNodes(ShouldDescendInto)
+                         .OfType<SingleVariableDesignationSyntax>()
+                         .Where(designation => designation.Ancestors().OfType<BlockSyntax>().FirstOrDefault() == body))
+            {
+                movedNames.Add(designation.Identifier.ValueText);
+            }
+        }
+
+        if (movedNames.Count == 0 && movedLabels.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var statement in parentBlock.Statements)
+        {
+            if (statement == ifStatement)
+            {
+                continue;
+            }
+
+            foreach (var node in statement.DescendantNodesAndSelf(ShouldDescendInto))
+            {
+                var name = node switch
+                {
+                    VariableDeclaratorSyntax variable => variable.Identifier.ValueText,
+                    SingleVariableDesignationSyntax designation => designation.Identifier.ValueText,
+                    ForEachStatementSyntax forEachStatement => forEachStatement.Identifier.ValueText,
+                    CatchDeclarationSyntax catchDeclaration => catchDeclaration.Identifier.ValueText,
+                    LocalFunctionStatementSyntax localFunction => localFunction.Identifier.ValueText,
+                    _ => null,
+                };
+
+                if (name is not null && movedNames.Contains(name))
+                {
+                    return true;
+                }
+
+                if (node is LabeledStatementSyntax label && movedLabels.Contains(label.Identifier.ValueText))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ShouldDescendInto(SyntaxNode node) =>
+        node is not AnonymousFunctionExpressionSyntax and
+        not LocalFunctionStatementSyntax and
+        not TypeDeclarationSyntax;
+
 }

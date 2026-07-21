@@ -3,6 +3,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace HooSharper.Analyzers;
 
@@ -47,7 +48,8 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
         }
 
         var key = invocation.ArgumentList.Arguments[0].Expression;
-        if (!IsStable(memberAccess.Expression) || !IsStable(key))
+        if (!IsCallbackStable(memberAccess.Expression, context.SemanticModel, context.CancellationToken) ||
+            !IsCallbackStable(key, context.SemanticModel, context.CancellationToken))
         {
             return;
         }
@@ -70,6 +72,12 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
             return;
         }
 
+        if (MayMutateLookup(ifStatement.Statement, memberAccess.Expression, key))
+        {
+            return;
+        }
+
+        var foundValueRead = false;
         foreach (var elementAccess in DescendantElementAccesses(ifStatement.Statement))
         {
             if (elementAccess.ArgumentList.Arguments.Count != 1)
@@ -85,11 +93,25 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
             }
 
             var indexer = context.SemanticModel.GetSymbolInfo(elementAccess, context.CancellationToken).Symbol as IPropertySymbol;
-            if (indexer is not null && IsDictionaryMember(indexer.OriginalDefinition.ContainingType, dictionaryDefinition, dictionaryInterface))
+            if (indexer is null || !IsDictionaryMember(
+                    indexer.OriginalDefinition.ContainingType,
+                    dictionaryDefinition,
+                    dictionaryInterface))
             {
-                context.ReportDiagnostic(Diagnostic.Create(Rule, memberAccess.Name.GetLocation()));
-                return;
+                continue;
             }
+
+            if (!IsValueRead(elementAccess, context.SemanticModel, context.CancellationToken))
+            {
+                continue;
+            }
+
+            foundValueRead = true;
+        }
+
+        if (foundValueRead)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, memberAccess.Name.GetLocation()));
         }
     }
 
@@ -100,27 +122,141 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
         SymbolEqualityComparer.Default.Equals(containingType.OriginalDefinition, dictionaryDefinition) ||
         SymbolEqualityComparer.Default.Equals(containingType.OriginalDefinition, dictionaryInterface);
 
-    private static bool IsStable(ExpressionSyntax expression)
+    private static bool IsCallbackStable(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken) =>
+        IsCallbackStableOperation(semanticModel.GetOperation(expression, cancellationToken));
+
+    private static bool IsCallbackStableOperation(IOperation? operation)
     {
-        expression = WalkDownParentheses(expression);
-        return expression switch
+        operation = Unwrap(operation);
+        return operation switch
         {
-            IdentifierNameSyntax or ThisExpressionSyntax or BaseExpressionSyntax or LiteralExpressionSyntax or
-                TypeOfExpressionSyntax or DefaultExpressionSyntax => true,
-            MemberAccessExpressionSyntax memberAccess when memberAccess.IsKind(SyntaxKind.SimpleMemberAccessExpression) =>
-                IsStable(memberAccess.Expression),
+            ILiteralOperation => true,
+            IDefaultValueOperation => true,
+            ITypeOfOperation => true,
+            ILocalReferenceOperation local when local.Local.IsConst => true,
+            IInstanceReferenceOperation => true,
+            IFieldReferenceOperation field when
+                (field.Field.IsConst || field.Field.IsReadOnly) && !field.Field.IsVolatile =>
+                field.Instance is null || IsCallbackStableOperation(field.Instance),
             _ => false,
         };
     }
 
-    private static ExpressionSyntax WalkDownParentheses(ExpressionSyntax expression)
+    private static bool IsValueRead(
+        ElementAccessExpressionSyntax elementAccess,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
     {
-        while (expression is ParenthesizedExpressionSyntax parenthesized)
+        var operation = Unwrap(semanticModel.GetOperation(elementAccess, cancellationToken));
+        var parent = operation?.Parent;
+        while (parent is IConversionOperation { IsImplicit: true } or IParenthesizedOperation)
         {
-            expression = parenthesized.Expression;
+            parent = parent.Parent;
         }
 
-        return expression;
+        if (parent is ISimpleAssignmentOperation simpleAssignment &&
+            ReferenceEquals(Unwrap(simpleAssignment.Target), operation) ||
+            parent is ICompoundAssignmentOperation compoundAssignment &&
+            ReferenceEquals(Unwrap(compoundAssignment.Target), operation) ||
+            parent is IIncrementOrDecrementOperation increment &&
+            ReferenceEquals(Unwrap(increment.Target), operation) ||
+            parent is IArgumentOperation argument && argument.Parameter?.RefKind != RefKind.None)
+        {
+            return false;
+        }
+
+        for (SyntaxNode? node = elementAccess.Parent; node is not null; node = node.Parent)
+        {
+            if (node is RefExpressionSyntax)
+            {
+                return false;
+            }
+
+            if (node is ArgumentSyntax argumentSyntax && !argumentSyntax.RefKindKeyword.IsKind(SyntaxKind.None))
+            {
+                return false;
+            }
+
+            if (node is StatementSyntax or ArrowExpressionClauseSyntax)
+            {
+                break;
+            }
+        }
+
+        return true;
+    }
+
+
+    private static bool MayMutateLookup(
+        StatementSyntax statement,
+        ExpressionSyntax dictionary,
+        ExpressionSyntax key)
+    {
+        foreach (var node in statement.DescendantNodes(ShouldDescendInto))
+        {
+            if (node is AssignmentExpressionSyntax assignment &&
+                (IsSameExpression(assignment.Left, dictionary) ||
+                 IsSameExpression(assignment.Left, key) ||
+                 IsDictionaryIndexer(assignment.Left, dictionary)))
+            {
+                return true;
+            }
+
+            var mutatedOperand = node switch
+            {
+                PrefixUnaryExpressionSyntax prefix when
+                    prefix.IsKind(SyntaxKind.PreIncrementExpression) ||
+                    prefix.IsKind(SyntaxKind.PreDecrementExpression) => prefix.Operand,
+                PostfixUnaryExpressionSyntax postfix when
+                    postfix.IsKind(SyntaxKind.PostIncrementExpression) ||
+                    postfix.IsKind(SyntaxKind.PostDecrementExpression) => postfix.Operand,
+                _ => null,
+            };
+            if (mutatedOperand is not null &&
+                (IsSameExpression(mutatedOperand, dictionary) ||
+                 IsSameExpression(mutatedOperand, key) ||
+                 IsDictionaryIndexer(mutatedOperand, dictionary)))
+            {
+                return true;
+            }
+
+            if (node is InvocationExpressionSyntax)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsSameExpression(ExpressionSyntax first, ExpressionSyntax second) =>
+        SyntaxFactory.AreEquivalent(first, second);
+
+    private static bool IsDictionaryIndexer(
+        ExpressionSyntax expression,
+        ExpressionSyntax dictionary) =>
+        expression is ElementAccessExpressionSyntax elementAccess &&
+        IsSameExpression(elementAccess.Expression, dictionary);
+
+    private static IOperation? Unwrap(IOperation? operation)
+    {
+        while (true)
+        {
+            operation = operation switch
+            {
+                IConversionOperation { IsImplicit: true } conversion => conversion.Operand,
+                IParenthesizedOperation parenthesized => parenthesized.Operand,
+                _ => operation,
+            };
+
+            if (operation is not IConversionOperation { IsImplicit: true } and not IParenthesizedOperation)
+            {
+                return operation;
+            }
+        }
     }
 
     private static ImmutableArray<ElementAccessExpressionSyntax> DescendantElementAccesses(StatementSyntax statement)
