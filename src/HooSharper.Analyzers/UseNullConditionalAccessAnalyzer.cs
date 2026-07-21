@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -28,15 +27,25 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
     {
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.EnableConcurrentExecution();
-        context.RegisterSyntaxNodeAction(AnalyzeConditionalExpression, SyntaxKind.ConditionalExpression);
+        context.RegisterCompilationStartAction(static compilationContext =>
+        {
+            var expressionType = compilationContext.Compilation.GetTypeByMetadataName(
+                "System.Linq.Expressions.Expression`1");
+            compilationContext.RegisterSyntaxNodeAction(
+                nodeContext => AnalyzeConditionalExpression(nodeContext, expressionType),
+                SyntaxKind.ConditionalExpression);
+        });
     }
 
-    private static void AnalyzeConditionalExpression(SyntaxNodeAnalysisContext context)
+    private static void AnalyzeConditionalExpression(
+        SyntaxNodeAnalysisContext context,
+        INamedTypeSymbol? expressionType)
     {
         var conditional = (ConditionalExpressionSyntax)context.Node;
         if (context.Node.SyntaxTree.Options is not CSharpParseOptions { LanguageVersion: >= LanguageVersion.CSharp6 } ||
-            IsWithinExpressionTree(conditional, context.SemanticModel, context.CancellationToken) ||
             HasDirective(conditional) ||
+            !HasCandidateShape(conditional) ||
+            IsWithinExpressionTree(conditional, context.SemanticModel, expressionType, context.CancellationToken) ||
             !TryGetCandidate(conditional, context.SemanticModel, context.CancellationToken,
                 out var receiver, out var access))
         {
@@ -304,18 +313,17 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
     private static bool IsWithinExpressionTree(
         SyntaxNode node,
         SemanticModel semanticModel,
+        INamedTypeSymbol? expressionType,
         System.Threading.CancellationToken cancellationToken)
     {
-        var expressionType = semanticModel.Compilation.GetTypeByMetadataName(
-            "System.Linq.Expressions.Expression`1");
         if (expressionType is null)
         {
             return false;
         }
-
-        foreach (var anonymousFunction in node.Ancestors().OfType<AnonymousFunctionExpressionSyntax>())
+        for (var ancestor = node.Parent; ancestor is not null; ancestor = ancestor.Parent)
         {
-            if (semanticModel.GetTypeInfo(anonymousFunction, cancellationToken).ConvertedType is
+            if (ancestor is AnonymousFunctionExpressionSyntax anonymousFunction &&
+                semanticModel.GetTypeInfo(anonymousFunction, cancellationToken).ConvertedType is
                     INamedTypeSymbol convertedType &&
                 SymbolEqualityComparer.Default.Equals(convertedType.OriginalDefinition, expressionType))
             {
@@ -324,6 +332,22 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    private static bool HasCandidateShape(ConditionalExpressionSyntax conditional)
+    {
+        var condition = WalkDownParentheses(conditional.Condition);
+        if (condition is not IsPatternExpressionSyntax &&
+            condition is not BinaryExpressionSyntax
+            {
+                RawKind: (int)SyntaxKind.EqualsExpression or (int)SyntaxKind.NotEqualsExpression,
+            })
+        {
+            return false;
+        }
+
+        return IsNullLiteral(conditional.WhenTrue) && TryGetAccessReceiver(conditional.WhenFalse, out _) ||
+            IsNullLiteral(conditional.WhenFalse) && TryGetAccessReceiver(conditional.WhenTrue, out _);
     }
 
     private static bool IsNullLiteral(ExpressionSyntax expression) =>

@@ -33,6 +33,7 @@ public sealed class UseUsingDeclarationCodeFixProvider : CodeFixProvider
             return;
         }
 
+
         context.RegisterCodeFix(
             CodeAction.Create(
                 "Use using declaration",
@@ -47,6 +48,7 @@ public sealed class UseUsingDeclarationCodeFixProvider : CodeFixProvider
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        var sourceText = await document.GetTextAsync(cancellationToken).ConfigureAwait(false);
         if (root is null ||
             usingStatement.Parent is not BlockSyntax parentBlock ||
             usingStatement.Declaration is not { } declaration ||
@@ -55,12 +57,7 @@ public sealed class UseUsingDeclarationCodeFixProvider : CodeFixProvider
             return document;
         }
 
-        var endOfLine = root.DescendantTrivia(descendIntoTrivia: true)
-            .FirstOrDefault(trivia => trivia.IsKind(SyntaxKind.EndOfLineTrivia));
-        if (endOfLine == default)
-        {
-            endOfLine = SyntaxFactory.CarriageReturnLineFeed;
-        }
+        var endOfLine = SyntaxFactory.EndOfLine(DetectEndOfLine(sourceText));
 
         var declarationLeadingTrivia = usingStatement.GetLeadingTrivia()
             .AddRange(CommentLines(usingStatement.UsingKeyword.TrailingTrivia, endOfLine))
@@ -116,6 +113,24 @@ public sealed class UseUsingDeclarationCodeFixProvider : CodeFixProvider
             formattedText.ChecksumAlgorithm));
     }
 
+
+    private static string DetectEndOfLine(Microsoft.CodeAnalysis.Text.SourceText sourceText)
+    {
+        for (var position = 0; position < sourceText.Length; position++)
+        {
+            switch (sourceText[position])
+            {
+                case '\n':
+                    return "\n";
+                case '\r':
+                    return position + 1 < sourceText.Length && sourceText[position + 1] == '\n'
+                        ? "\r\n"
+                        : "\r";
+            }
+        }
+
+        return "\r\n";
+    }
 
     private static SyntaxTriviaList CommentLines(
         SyntaxTriviaList trivia,

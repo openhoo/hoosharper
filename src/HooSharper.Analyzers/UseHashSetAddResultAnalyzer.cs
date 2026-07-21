@@ -27,10 +27,24 @@ public sealed class UseHashSetAddResultAnalyzer : DiagnosticAnalyzer
     {
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.EnableConcurrentExecution();
-        context.RegisterSyntaxNodeAction(AnalyzeIfStatement, SyntaxKind.IfStatement);
+        context.RegisterCompilationStartAction(static compilationContext =>
+        {
+            var hashSetDefinition = compilationContext.Compilation.GetTypeByMetadataName(
+                "System.Collections.Generic.HashSet`1");
+            if (hashSetDefinition is null)
+            {
+                return;
+            }
+
+            compilationContext.RegisterSyntaxNodeAction(
+                nodeContext => AnalyzeIfStatement(nodeContext, hashSetDefinition),
+                SyntaxKind.IfStatement);
+        });
     }
 
-    private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
+    private static void AnalyzeIfStatement(
+        SyntaxNodeAnalysisContext context,
+        INamedTypeSymbol hashSetDefinition)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
         if (ifStatement.Else is not null ||
@@ -55,26 +69,25 @@ public sealed class UseHashSetAddResultAnalyzer : DiagnosticAnalyzer
         var containsValue = containsInvocation.ArgumentList.Arguments[0].Expression;
         var addValue = addInvocation.ArgumentList.Arguments[0].Expression;
         if (!SyntaxFactory.AreEquivalent(containsMember.Expression, addMember.Expression) ||
-            !SyntaxFactory.AreEquivalent(containsValue, addValue) ||
-            !IsCallbackStable(containsMember.Expression, context.SemanticModel, context.CancellationToken) ||
-            !IsCallbackStable(containsValue, context.SemanticModel, context.CancellationToken))
+            !SyntaxFactory.AreEquivalent(containsValue, addValue))
         {
             return;
         }
 
-        var hashSetDefinition = context.SemanticModel.Compilation.GetTypeByMetadataName(
-            "System.Collections.Generic.HashSet`1");
-        var receiverType = context.SemanticModel.GetTypeInfo(containsMember.Expression, context.CancellationToken).Type;
-        if (hashSetDefinition is null || receiverType is not INamedTypeSymbol namedReceiver ||
+        var receiverOperation = context.SemanticModel.GetOperation(containsMember.Expression, context.CancellationToken);
+        var valueOperation = context.SemanticModel.GetOperation(containsValue, context.CancellationToken);
+        if (!IsCallbackStableOperation(receiverOperation) ||
+            !IsCallbackStableOperation(valueOperation) ||
+            receiverOperation?.Type is not INamedTypeSymbol namedReceiver ||
             !SymbolEqualityComparer.Default.Equals(namedReceiver.OriginalDefinition, hashSetDefinition))
         {
             return;
         }
 
-        var containsMethod = context.SemanticModel.GetSymbolInfo(containsInvocation, context.CancellationToken).Symbol as IMethodSymbol;
-        var addMethod = context.SemanticModel.GetSymbolInfo(addInvocation, context.CancellationToken).Symbol as IMethodSymbol;
-        if (!IsHashSetMethod(containsMethod, hashSetDefinition, "Contains") ||
-            !IsHashSetMethod(addMethod, hashSetDefinition, "Add"))
+        var containsOperation = context.SemanticModel.GetOperation(containsInvocation, context.CancellationToken) as IInvocationOperation;
+        var addOperation = context.SemanticModel.GetOperation(addInvocation, context.CancellationToken) as IInvocationOperation;
+        if (!IsHashSetMethod(containsOperation?.TargetMethod, hashSetDefinition, "Contains") ||
+            !IsHashSetMethod(addOperation?.TargetMethod, hashSetDefinition, "Add"))
         {
             return;
         }
@@ -120,11 +133,6 @@ public sealed class UseHashSetAddResultAnalyzer : DiagnosticAnalyzer
         method.Name == name &&
         SymbolEqualityComparer.Default.Equals(method.OriginalDefinition.ContainingType.OriginalDefinition, hashSetDefinition);
 
-    private static bool IsCallbackStable(
-        ExpressionSyntax expression,
-        SemanticModel semanticModel,
-        System.Threading.CancellationToken cancellationToken) =>
-        IsCallbackStableOperation(semanticModel.GetOperation(expression, cancellationToken));
 
     private static bool IsCallbackStableOperation(IOperation? operation)
     {

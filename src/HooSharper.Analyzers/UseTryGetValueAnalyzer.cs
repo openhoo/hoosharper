@@ -27,10 +27,27 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
     {
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.EnableConcurrentExecution();
-        context.RegisterSyntaxNodeAction(AnalyzeIfStatement, SyntaxKind.IfStatement);
+        context.RegisterCompilationStartAction(static compilationContext =>
+        {
+            var dictionaryDefinition = compilationContext.Compilation.GetTypeByMetadataName(
+                "System.Collections.Generic.Dictionary`2");
+            var dictionaryInterface = compilationContext.Compilation.GetTypeByMetadataName(
+                "System.Collections.Generic.IDictionary`2");
+            if (dictionaryDefinition is null && dictionaryInterface is null)
+            {
+                return;
+            }
+
+            compilationContext.RegisterSyntaxNodeAction(
+                nodeContext => AnalyzeIfStatement(nodeContext, dictionaryDefinition, dictionaryInterface),
+                SyntaxKind.IfStatement);
+        });
     }
 
-    private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
+    private static void AnalyzeIfStatement(
+        SyntaxNodeAnalysisContext context,
+        INamedTypeSymbol? dictionaryDefinition,
+        INamedTypeSymbol? dictionaryInterface)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
         if (ifStatement.Else is not null || HasDirective(ifStatement) ||
@@ -48,26 +65,22 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
         }
 
         var key = invocation.ArgumentList.Arguments[0].Expression;
-        if (!IsCallbackStable(memberAccess.Expression, context.SemanticModel, context.CancellationToken) ||
-            !IsCallbackStable(key, context.SemanticModel, context.CancellationToken))
-        {
-            return;
-        }
-
-        var dictionaryType = context.SemanticModel.GetTypeInfo(memberAccess.Expression, context.CancellationToken).Type;
-        var dictionaryDefinition = context.SemanticModel.Compilation.GetTypeByMetadataName(
-            "System.Collections.Generic.Dictionary`2");
-        var dictionaryInterface = context.SemanticModel.Compilation.GetTypeByMetadataName(
-            "System.Collections.Generic.IDictionary`2");
-        if (dictionaryType is not INamedTypeSymbol namedType ||
+        var dictionaryOperation = context.SemanticModel.GetOperation(memberAccess.Expression, context.CancellationToken);
+        var keyOperation = context.SemanticModel.GetOperation(key, context.CancellationToken);
+        if (!IsCallbackStableOperation(dictionaryOperation) ||
+            !IsCallbackStableOperation(keyOperation) ||
+            dictionaryOperation?.Type is not INamedTypeSymbol namedType ||
             (!SymbolEqualityComparer.Default.Equals(namedType.OriginalDefinition, dictionaryDefinition) &&
              !SymbolEqualityComparer.Default.Equals(namedType.OriginalDefinition, dictionaryInterface)))
         {
             return;
         }
 
-        var method = context.SemanticModel.GetSymbolInfo(invocation, context.CancellationToken).Symbol as IMethodSymbol;
-        if (method is null || !IsDictionaryMember(method.OriginalDefinition.ContainingType, dictionaryDefinition, dictionaryInterface))
+        var invocationOperation = context.SemanticModel.GetOperation(invocation, context.CancellationToken) as IInvocationOperation;
+        if (invocationOperation is null || !IsDictionaryMember(
+                invocationOperation.TargetMethod.OriginalDefinition.ContainingType,
+                dictionaryDefinition,
+                dictionaryInterface))
         {
             return;
         }
@@ -77,10 +90,9 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var foundValueRead = false;
-        foreach (var elementAccess in DescendantElementAccesses(ifStatement.Statement))
+        foreach (var node in ifStatement.Statement.DescendantNodes(ShouldDescendInto))
         {
-            if (elementAccess.ArgumentList.Arguments.Count != 1)
+            if (node is not ElementAccessExpressionSyntax { ArgumentList.Arguments.Count: 1 } elementAccess)
             {
                 continue;
             }
@@ -92,26 +104,19 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            var indexer = context.SemanticModel.GetSymbolInfo(elementAccess, context.CancellationToken).Symbol as IPropertySymbol;
-            if (indexer is null || !IsDictionaryMember(
-                    indexer.OriginalDefinition.ContainingType,
+            var elementOperation = Unwrap(context.SemanticModel.GetOperation(elementAccess, context.CancellationToken));
+            if (elementOperation is not IPropertyReferenceOperation indexerOperation ||
+                !IsDictionaryMember(
+                    indexerOperation.Property.OriginalDefinition.ContainingType,
                     dictionaryDefinition,
-                    dictionaryInterface))
+                    dictionaryInterface) ||
+                !IsValueRead(elementAccess, elementOperation))
             {
                 continue;
             }
 
-            if (!IsValueRead(elementAccess, context.SemanticModel, context.CancellationToken))
-            {
-                continue;
-            }
-
-            foundValueRead = true;
-        }
-
-        if (foundValueRead)
-        {
             context.ReportDiagnostic(Diagnostic.Create(Rule, memberAccess.Name.GetLocation()));
+            return;
         }
     }
 
@@ -122,11 +127,6 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
         SymbolEqualityComparer.Default.Equals(containingType.OriginalDefinition, dictionaryDefinition) ||
         SymbolEqualityComparer.Default.Equals(containingType.OriginalDefinition, dictionaryInterface);
 
-    private static bool IsCallbackStable(
-        ExpressionSyntax expression,
-        SemanticModel semanticModel,
-        System.Threading.CancellationToken cancellationToken) =>
-        IsCallbackStableOperation(semanticModel.GetOperation(expression, cancellationToken));
 
     private static bool IsCallbackStableOperation(IOperation? operation)
     {
@@ -147,11 +147,9 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
 
     private static bool IsValueRead(
         ElementAccessExpressionSyntax elementAccess,
-        SemanticModel semanticModel,
-        System.Threading.CancellationToken cancellationToken)
+        IOperation operation)
     {
-        var operation = Unwrap(semanticModel.GetOperation(elementAccess, cancellationToken));
-        var parent = operation?.Parent;
+        var parent = operation.Parent;
         while (parent is IConversionOperation { IsImplicit: true } or IParenthesizedOperation)
         {
             parent = parent.Parent;
@@ -259,19 +257,6 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
         }
     }
 
-    private static ImmutableArray<ElementAccessExpressionSyntax> DescendantElementAccesses(StatementSyntax statement)
-    {
-        var builder = ImmutableArray.CreateBuilder<ElementAccessExpressionSyntax>();
-        foreach (var node in statement.DescendantNodes(ShouldDescendInto))
-        {
-            if (node is ElementAccessExpressionSyntax elementAccess)
-            {
-                builder.Add(elementAccess);
-            }
-        }
-
-        return builder.ToImmutable();
-    }
 
     private static bool ShouldDescendInto(SyntaxNode node) =>
         node is not AnonymousFunctionExpressionSyntax and

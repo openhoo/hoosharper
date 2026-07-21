@@ -36,7 +36,7 @@ public sealed class SimplifyBooleanComparisonAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeComparison(SyntaxNodeAnalysisContext context)
     {
         var comparison = (BinaryExpressionSyntax)context.Node;
-        if (!TryGetBooleanLiteralOperand(comparison, out var expression))
+        if (!TryGetBooleanLiteralOperand(comparison, out _))
         {
             return;
         }
@@ -50,11 +50,6 @@ public sealed class SimplifyBooleanComparisonAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var expressionType = context.SemanticModel.GetTypeInfo(expression, context.CancellationToken).Type;
-        if (expressionType?.SpecialType != SpecialType.System_Boolean)
-        {
-            return;
-        }
 
         context.ReportDiagnostic(Diagnostic.Create(Rule, comparison.OperatorToken.GetLocation()));
     }

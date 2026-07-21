@@ -41,16 +41,16 @@ public sealed class PreferLoopContinueAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        if (context.SemanticModel.GetTypeInfo(ifStatement.Condition, context.CancellationToken).Type?.SpecialType !=
-            SpecialType.System_Boolean)
-        {
-            return;
-        }
-
         if (ifStatement.Parent is not BlockSyntax loopBody ||
             loopBody.Statements.LastOrDefault() != ifStatement ||
             !IsLoopBody(loopBody) ||
             HasBindingCollision(ifStatement, loopBody, block))
+        {
+            return;
+        }
+
+        if (context.SemanticModel.GetTypeInfo(ifStatement.Condition, context.CancellationToken).Type?.SpecialType !=
+            SpecialType.System_Boolean)
         {
             return;
         }
@@ -72,9 +72,10 @@ public sealed class PreferLoopContinueAnalyzer : DiagnosticAnalyzer
         var ifIndex = loopBody.Statements.IndexOf(ifStatement);
         for (var index = 0; index < ifIndex; index++)
         {
-            foreach (var name in CollectDeclaredNames(loopBody.Statements[index]))
+            foreach (var node in loopBody.Statements[index].DescendantNodes())
             {
-                if (introducedNames.Contains(name))
+                var name = GetDeclaredName(node);
+                if (name is not null && introducedNames.Contains(name))
                 {
                     return true;
                 }
@@ -89,28 +90,25 @@ public sealed class PreferLoopContinueAnalyzer : DiagnosticAnalyzer
         var names = new HashSet<string>(System.StringComparer.Ordinal);
         foreach (var node in scope.DescendantNodes())
         {
-            switch (node)
+            var name = GetDeclaredName(node);
+            if (name is not null)
             {
-                case VariableDeclaratorSyntax declarator:
-                    names.Add(declarator.Identifier.ValueText);
-                    break;
-                case SingleVariableDesignationSyntax designation:
-                    names.Add(designation.Identifier.ValueText);
-                    break;
-                case ForEachStatementSyntax forEachStatement:
-                    names.Add(forEachStatement.Identifier.ValueText);
-                    break;
-                case CatchDeclarationSyntax catchDeclaration:
-                    names.Add(catchDeclaration.Identifier.ValueText);
-                    break;
-                case LocalFunctionStatementSyntax localFunction:
-                    names.Add(localFunction.Identifier.ValueText);
-                    break;
+                names.Add(name);
             }
         }
 
         return names;
     }
+
+    private static string? GetDeclaredName(SyntaxNode node) => node switch
+    {
+        VariableDeclaratorSyntax declarator => declarator.Identifier.ValueText,
+        SingleVariableDesignationSyntax designation => designation.Identifier.ValueText,
+        ForEachStatementSyntax forEachStatement => forEachStatement.Identifier.ValueText,
+        CatchDeclarationSyntax catchDeclaration => catchDeclaration.Identifier.ValueText,
+        LocalFunctionStatementSyntax localFunction => localFunction.Identifier.ValueText,
+        _ => null,
+    };
 
     private static bool IsLoopBody(BlockSyntax block) => block.Parent switch
     {

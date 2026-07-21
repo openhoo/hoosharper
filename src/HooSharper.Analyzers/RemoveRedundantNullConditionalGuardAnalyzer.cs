@@ -42,16 +42,15 @@ public sealed class RemoveRedundantNullConditionalGuardAnalyzer : DiagnosticAnal
             } ||
             HasDirective(ifStatement) ||
             !TryGetNonNullCheckedReceiver(ifStatement.Condition, context, out var checkedReceiver, out var location) ||
-            !IsStableReceiver(checkedReceiver, context.SemanticModel, context.CancellationToken) ||
-            !IsStableReceiver(conditionalAccess.Expression, context.SemanticModel, context.CancellationToken))
+            !TryGetStableReceiverOperation(checkedReceiver, context.SemanticModel, context.CancellationToken,
+                out var checkedOperation) ||
+            !TryGetStableReceiverOperation(conditionalAccess.Expression, context.SemanticModel, context.CancellationToken,
+                out var accessedOperation))
         {
             return;
         }
 
-        var checkedOperation = context.SemanticModel.GetOperation(checkedReceiver, context.CancellationToken);
-        var accessedOperation = context.SemanticModel.GetOperation(conditionalAccess.Expression, context.CancellationToken);
-        if (checkedOperation is null || accessedOperation is null ||
-            !AreEquivalentReferences(checkedOperation, accessedOperation))
+        if (!AreEquivalentReferences(checkedOperation, accessedOperation))
         {
             return;
         }
@@ -116,19 +115,22 @@ public sealed class RemoveRedundantNullConditionalGuardAnalyzer : DiagnosticAnal
         return false;
     }
 
-    private static bool IsStableReceiver(
+    private static bool TryGetStableReceiverOperation(
         ExpressionSyntax expression,
         SemanticModel semanticModel,
-        System.Threading.CancellationToken cancellationToken)
+        System.Threading.CancellationToken cancellationToken,
+        out IOperation operation)
     {
         expression = WalkDownParentheses(expression);
         if (expression is not (IdentifierNameSyntax or ThisExpressionSyntax or BaseExpressionSyntax or
             MemberAccessExpressionSyntax { RawKind: (int)SyntaxKind.SimpleMemberAccessExpression }))
         {
+            operation = null!;
             return false;
         }
 
-        return IsStableOperation(semanticModel.GetOperation(expression, cancellationToken));
+        operation = semanticModel.GetOperation(expression, cancellationToken)!;
+        return operation is not null && IsStableOperation(operation);
     }
 
     private static bool IsStableOperation(IOperation? operation)

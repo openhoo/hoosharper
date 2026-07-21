@@ -33,6 +33,7 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
             return;
         }
 
+
         context.RegisterCodeFix(
             CodeAction.Create(
                 "Use TryGetValue",
@@ -135,9 +136,11 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
         SemanticModel semanticModel,
         IfStatementSyntax ifStatement)
     {
-        var unavailableNames = new HashSet<string>(
-            semanticModel.LookupSymbols(ifStatement.SpanStart).Select(symbol => symbol.Name),
-            System.StringComparer.Ordinal);
+        var unavailableNames = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (var symbol in semanticModel.LookupSymbols(ifStatement.SpanStart))
+        {
+            unavailableNames.Add(symbol.Name);
+        }
 
         var enclosingScope = ifStatement.Parent ?? ifStatement;
         foreach (var token in enclosingScope.DescendantTokens())
@@ -157,14 +160,21 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
 
         if (ifStatement.Parent is BlockSyntax block)
         {
-            foreach (var precedingIf in block.Statements.TakeWhile(statement => statement != ifStatement)
-                         .OfType<IfStatementSyntax>())
+            foreach (var statement in block.Statements)
             {
-                if (precedingIf.Condition is InvocationExpressionSyntax
+                if (statement == ifStatement)
+                {
+                    break;
+                }
+
+                if (statement is IfStatementSyntax
                     {
-                        Expression: MemberAccessExpressionSyntax
+                        Condition: InvocationExpressionSyntax
                         {
-                            Name.Identifier.ValueText: "ContainsKey",
+                            Expression: MemberAccessExpressionSyntax
+                            {
+                                Name.Identifier.ValueText: "ContainsKey",
+                            },
                         },
                     })
                 {

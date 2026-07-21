@@ -81,10 +81,12 @@ public sealed class MergeNestedIfAnalyzer : DiagnosticAnalyzer
         var current = outerIf;
         while (TryGetInnerIf(current, out var innerIf))
         {
-            foreach (var designation in innerIf.Condition.DescendantNodesAndSelf()
-                .OfType<SingleVariableDesignationSyntax>())
+            foreach (var node in innerIf.Condition.DescendantNodesAndSelf())
             {
-                introducedNames.Add(designation.Identifier.ValueText);
+                if (node is SingleVariableDesignationSyntax designation)
+                {
+                    introducedNames.Add(designation.Identifier.ValueText);
+                }
             }
 
             current = innerIf;
@@ -95,18 +97,23 @@ public sealed class MergeNestedIfAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        foreach (var laterStatement in containingBlock.Statements.Skip(outerIndex + 1))
+        for (var statementIndex = outerIndex + 1; statementIndex < containingBlock.Statements.Count; statementIndex++)
         {
-            if (laterStatement.DescendantNodesAndSelf().OfType<VariableDeclaratorSyntax>()
-                    .Any(declaration => introducedNames.Contains(declaration.Identifier.ValueText)) ||
-                laterStatement.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>()
-                    .Any(declaration => introducedNames.Contains(declaration.Identifier.ValueText)) ||
-                laterStatement.DescendantNodesAndSelf().OfType<ForEachStatementSyntax>()
-                    .Any(declaration => introducedNames.Contains(declaration.Identifier.ValueText)) ||
-                laterStatement.DescendantNodesAndSelf().OfType<LocalFunctionStatementSyntax>()
-                    .Any(declaration => introducedNames.Contains(declaration.Identifier.ValueText)))
+            foreach (var node in containingBlock.Statements[statementIndex].DescendantNodesAndSelf())
             {
-                return true;
+                var name = node switch
+                {
+                    VariableDeclaratorSyntax declaration => declaration.Identifier.ValueText,
+                    SingleVariableDesignationSyntax designation => designation.Identifier.ValueText,
+                    ForEachStatementSyntax forEachStatement => forEachStatement.Identifier.ValueText,
+                    LocalFunctionStatementSyntax localFunction => localFunction.Identifier.ValueText,
+                    _ => null,
+                };
+
+                if (name is not null && introducedNames.Contains(name))
+                {
+                    return true;
+                }
             }
         }
 

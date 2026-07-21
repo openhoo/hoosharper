@@ -9,3 +9,5 @@ TestResults/
 *.nupkg
 artifacts/
 node_modules/
+
+BenchmarkDotNet.Artifacts/

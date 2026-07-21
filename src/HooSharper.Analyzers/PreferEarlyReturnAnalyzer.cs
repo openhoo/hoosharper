@@ -40,20 +40,16 @@ public sealed class PreferEarlyReturnAnalyzer : DiagnosticAnalyzer
             return;
         }
 
+        if (ifStatement.Parent is not BlockSyntax parentBlock || parentBlock.Statements.LastOrDefault() != ifStatement ||
+            parentBlock.Parent is not MethodDeclarationSyntax method ||
+            method.ReturnType is not PredefinedTypeSyntax { Keyword.RawKind: (int)SyntaxKind.VoidKeyword } ||
+            HasScopeCollision(ifStatement, parentBlock, block))
+        {
+            return;
+        }
+
         if (context.SemanticModel.GetTypeInfo(ifStatement.Condition, context.CancellationToken).Type?.SpecialType !=
             SpecialType.System_Boolean)
-        {
-            return;
-        }
-
-        if (ifStatement.Parent is not BlockSyntax parentBlock || parentBlock.Statements.LastOrDefault() != ifStatement)
-        {
-            return;
-        }
-
-        if (parentBlock.Parent is not MethodDeclarationSyntax method || !method.ReturnType.IsKind(SyntaxKind.PredefinedType) ||
-            !((PredefinedTypeSyntax)method.ReturnType).Keyword.IsKind(SyntaxKind.VoidKeyword) ||
-            HasScopeCollision(ifStatement, parentBlock, block))
         {
             return;
         }
@@ -88,10 +84,14 @@ public sealed class PreferEarlyReturnAnalyzer : DiagnosticAnalyzer
                     break;
             }
 
-            foreach (var designation in statement.DescendantNodes(ShouldDescendInto)
-                         .OfType<SingleVariableDesignationSyntax>()
-                         .Where(designation => designation.Ancestors().OfType<BlockSyntax>().FirstOrDefault() == body))
+            foreach (var node in statement.DescendantNodes(ShouldDescendInto))
             {
+                if (node is not SingleVariableDesignationSyntax designation ||
+                    !IsDirectlyContainedBy(designation, body))
+                {
+                    continue;
+                }
+
                 movedNames.Add(designation.Identifier.ValueText);
             }
         }
@@ -129,6 +129,19 @@ public sealed class PreferEarlyReturnAnalyzer : DiagnosticAnalyzer
                 {
                     return true;
                 }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsDirectlyContainedBy(SyntaxNode node, BlockSyntax body)
+    {
+        for (var current = node.Parent; current is not null; current = current.Parent)
+        {
+            if (current is BlockSyntax containingBlock)
+            {
+                return containingBlock == body;
             }
         }
 

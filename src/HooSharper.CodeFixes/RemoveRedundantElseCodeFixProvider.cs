@@ -132,11 +132,19 @@ public sealed class RemoveRedundantElseCodeFixProvider : CodeFixProvider
         return replacements;
     }
 
-    private static bool RequiresPreservedScope(BlockSyntax block) =>
-        block.Statements.Any(statement =>
-            statement is LocalDeclarationStatementSyntax or LocalFunctionStatementSyntax ||
-            statement.DescendantNodes().Any(node =>
-                node is DeclarationExpressionSyntax or SingleVariableDesignationSyntax));
+    private static bool RequiresPreservedScope(BlockSyntax block)
+    {
+        foreach (var node in block.DescendantNodes())
+        {
+            if (node is LocalDeclarationStatementSyntax or LocalFunctionStatementSyntax or
+                DeclarationExpressionSyntax or SingleVariableDesignationSyntax)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static SyntaxTriviaList SignificantTrivia(SyntaxTriviaList trivia) =>
         SyntaxFactory.TriviaList(trivia.Where(item =>

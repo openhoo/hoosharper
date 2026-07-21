@@ -33,6 +33,7 @@ public sealed class WrapFluentChainCodeFixProvider : CodeFixProvider
             return;
         }
 
+
         context.RegisterCodeFix(
             CodeAction.Create(
                 "Wrap fluent chain",
@@ -47,6 +48,7 @@ public sealed class WrapFluentChainCodeFixProvider : CodeFixProvider
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        var sourceText = await document.GetTextAsync(cancellationToken).ConfigureAwait(false);
         var containingNode = (SyntaxNode?)expression.FirstAncestorOrSelf<StatementSyntax>() ??
             expression.FirstAncestorOrSelf<ArrowExpressionClauseSyntax>();
         if (root is null || containingNode is null || HasDirective(expression) ||
@@ -55,8 +57,8 @@ public sealed class WrapFluentChainCodeFixProvider : CodeFixProvider
             return document;
         }
 
-        var indentation = GetIndentation(containingNode) + GetContinuationIndentation(document, expression.SyntaxTree);
-        var endOfLine = DetectEndOfLine(root);
+        var indentation = GetIndentation(containingNode, sourceText) + GetContinuationIndentation(document, expression.SyntaxTree);
+        var endOfLine = DetectEndOfLine(sourceText);
         var replacements = new Dictionary<SyntaxToken, SyntaxToken>();
         foreach (var dot in dots)
         {
@@ -109,9 +111,11 @@ public sealed class WrapFluentChainCodeFixProvider : CodeFixProvider
         return true;
     }
 
-    private static string GetIndentation(SyntaxNode containingNode)
+    private static string GetIndentation(
+        SyntaxNode containingNode,
+        Microsoft.CodeAnalysis.Text.SourceText sourceText)
     {
-        var line = containingNode.SyntaxTree.GetText().Lines.GetLineFromPosition(containingNode.SpanStart);
+        var line = sourceText.Lines.GetLineFromPosition(containingNode.SpanStart);
         var text = line.ToString();
         var indentationLength = 0;
         while (indentationLength < text.Length &&
@@ -153,13 +157,18 @@ public sealed class WrapFluentChainCodeFixProvider : CodeFixProvider
         return new string(' ', indentSize);
     }
 
-    private static string DetectEndOfLine(SyntaxNode root)
+    private static string DetectEndOfLine(Microsoft.CodeAnalysis.Text.SourceText sourceText)
     {
-        foreach (var trivia in root.DescendantTrivia(descendIntoTrivia: true))
+        for (var position = 0; position < sourceText.Length; position++)
         {
-            if (trivia.IsKind(SyntaxKind.EndOfLineTrivia))
+            switch (sourceText[position])
             {
-                return trivia.ToString();
+                case '\n':
+                    return "\n";
+                case '\r':
+                    return position + 1 < sourceText.Length && sourceText[position + 1] == '\n'
+                        ? "\r\n"
+                        : "\r";
             }
         }
 

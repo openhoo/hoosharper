@@ -64,9 +64,10 @@ public sealed class OmitBracesForSingleLineIfAnalyzer : DiagnosticAnalyzer
     private static bool HasExpandedScopeCollision(BlockSyntax block, StatementSyntax nestedStatement)
     {
         var introducedNames = new HashSet<string>(System.StringComparer.Ordinal);
-        foreach (var designation in nestedStatement.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>())
+        foreach (var node in nestedStatement.DescendantNodesAndSelf())
         {
-            if (!designation.Identifier.IsKind(SyntaxKind.UnderscoreToken))
+            if (node is SingleVariableDesignationSyntax designation &&
+                !designation.Identifier.IsKind(SyntaxKind.UnderscoreToken))
             {
                 introducedNames.Add(designation.Identifier.ValueText);
             }
@@ -77,7 +78,16 @@ public sealed class OmitBracesForSingleLineIfAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        var containingStatement = block.Ancestors().OfType<StatementSyntax>().FirstOrDefault();
+        StatementSyntax? containingStatement = null;
+        for (var current = block.Parent; current is not null; current = current.Parent)
+        {
+            if (current is StatementSyntax statement)
+            {
+                containingStatement = statement;
+                break;
+            }
+        }
+
         if (containingStatement?.Parent is not BlockSyntax parentBlock)
         {
             return true;

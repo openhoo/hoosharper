@@ -431,10 +431,11 @@ dotnet list HooSharper.slnx package --outdated
 ### Project layout
 
 ```text
-src/HooSharper.Analyzers/       DiagnosticAnalyzer implementations
-src/HooSharper.CodeFixes/       CodeFixProvider implementations
-tests/HooSharper.Analyzers.Tests/ Analyzer and code-fix tests
-artifacts/                       Local NuGet packages; ignored by Git
+src/HooSharper.Analyzers/          DiagnosticAnalyzer implementations
+src/HooSharper.CodeFixes/          CodeFixProvider implementations
+tests/HooSharper.Analyzers.Tests/  Analyzer and code-fix tests
+benchmarks/HooSharper.Performance/ BenchmarkDotNet performance suite
+artifacts/                          Local NuGet packages; ignored by Git
 ```
 
 Each rule has:
@@ -468,6 +469,48 @@ dotnet test tests/HooSharper.Analyzers.Tests/HooSharper.Analyzers.Tests.csproj \
 ```
 
 The custom test verifier is in `tests/HooSharper.Analyzers.Tests/AnalyzerVerifier.cs`.
+
+### Performance benchmarks
+
+The BenchmarkDotNet project measures real Roslyn analyzer and code-fix execution. It creates deterministic compilations with 100 or 1,000 candidate groups and records both execution time and managed allocations.
+
+Code-fix application benchmarks create a fresh Roslyn workspace, diagnostic, and action for every measured invocation. Their result therefore includes fixture analysis and action registration as well as action computation and application; registration-only benchmarks isolate `RegisterCodeFixesAsync`.
+
+List the available benchmarks:
+
+```bash
+dotnet run --project benchmarks/HooSharper.Performance/HooSharper.Performance.csproj \
+  -c Release \
+  -- --list flat
+```
+
+Run the complete suite:
+
+```bash
+dotnet run --project benchmarks/HooSharper.Performance/HooSharper.Performance.csproj \
+  -c Release \
+  --no-build
+```
+
+Useful focused runs:
+
+```bash
+# All analyzers together and collection-heavy rules
+dotnet run --project benchmarks/HooSharper.Performance/HooSharper.Performance.csproj \
+  -c Release --no-build -- --filter '*AnalyzerBenchmarks*'
+
+# One benchmark case for every HOO1001-HOO1020 analyzer
+dotnet run --project benchmarks/HooSharper.Performance/HooSharper.Performance.csproj \
+  -c Release --no-build -- --filter '*IndividualAnalyzerBenchmarks*'
+
+# Code-action registration and application
+dotnet run --project benchmarks/HooSharper.Performance/HooSharper.Performance.csproj \
+  -c Release --no-build -- --filter '*CodeFixBenchmarks*'
+```
+
+The stable local job uses five warmup iterations, twelve measured iterations, and a 200 ms minimum iteration time. Reports are exported as JSON and GitHub-flavored Markdown under `BenchmarkDotNet.Artifacts/results/`. The artifact directory is local output and should not be committed.
+
+Compare performance using the same benchmark sources, SDK, build configuration, parameters, and machine state on both revisions. Treat overlapping confidence intervals as inconclusive; do not infer improvements from mean values alone.
 
 ## Packaging
 

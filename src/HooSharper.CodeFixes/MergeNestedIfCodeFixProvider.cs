@@ -24,14 +24,18 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
     public override async Task RegisterCodeFixesAsync(CodeFixContext context)
     {
         var root = await context.Document.GetSyntaxRootAsync(context.CancellationToken).ConfigureAwait(false);
-        var semanticModel = await context.Document.GetSemanticModelAsync(context.CancellationToken)
-            .ConfigureAwait(false);
         var diagnostic = context.Diagnostics[0];
         var outerIf = root?.FindToken(diagnostic.Location.SourceSpan.Start).Parent?
             .AncestorsAndSelf().OfType<IfStatementSyntax>().FirstOrDefault();
 
-        if (!TryGetInnerIf(outerIf, out _) ||
-            semanticModel is null ||
+        if (!TryGetInnerIf(outerIf, out _))
+        {
+            return;
+        }
+
+        var semanticModel = await context.Document.GetSemanticModelAsync(context.CancellationToken)
+            .ConfigureAwait(false);
+        if (semanticModel is null ||
             !AreAllConditionsOrdinaryBoolean(semanticModel, outerIf!, context.CancellationToken))
         {
             return;

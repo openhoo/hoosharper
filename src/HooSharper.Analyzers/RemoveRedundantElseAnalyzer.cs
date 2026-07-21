@@ -53,8 +53,19 @@ public sealed class RemoveRedundantElseAnalyzer : DiagnosticAnalyzer
         {
             return false;
         }
+        if (block.Statements.Count == 0)
+        {
+            return false;
+        }
 
-        for (var index = block.Statements.Count - 1; index >= 0; index--)
+        var lastStatement = block.Statements[block.Statements.Count - 1];
+        if (lastStatement is ReturnStatementSyntax or ThrowStatementSyntax or ContinueStatementSyntax or BreakStatementSyntax)
+        {
+            return true;
+        }
+
+
+        for (var index = block.Statements.Count - 2; index >= 0; index--)
         {
             var candidate = block.Statements[index];
             var controlFlow = semanticModel.AnalyzeControlFlow(candidate);

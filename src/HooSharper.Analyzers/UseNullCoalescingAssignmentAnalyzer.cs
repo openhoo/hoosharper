@@ -55,15 +55,10 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        if (!IsSupportedTarget(checkedTarget, context.SemanticModel, context.CancellationToken) ||
-            !IsSupportedTarget(assignment.Left, context.SemanticModel, context.CancellationToken))
-        {
-            return;
-        }
-
-        var checkedOperation = context.SemanticModel.GetOperation(checkedTarget, context.CancellationToken);
-        var assignedOperation = context.SemanticModel.GetOperation(assignment.Left, context.CancellationToken);
-        if (checkedOperation is null || assignedOperation is null ||
+        if (!TryGetSupportedTargetOperation(checkedTarget, context.SemanticModel, context.CancellationToken,
+                out var checkedOperation) ||
+            !TryGetSupportedTargetOperation(assignment.Left, context.SemanticModel, context.CancellationToken,
+                out var assignedOperation) ||
             !AreEquivalentReferences(checkedOperation, assignedOperation) ||
             !SupportsNullCoalescingAssignment(assignedOperation.Type))
         {
@@ -112,10 +107,11 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    private static bool IsSupportedTarget(
+    private static bool TryGetSupportedTargetOperation(
         ExpressionSyntax expression,
         SemanticModel semanticModel,
-        System.Threading.CancellationToken cancellationToken)
+        System.Threading.CancellationToken cancellationToken,
+        out IOperation operation)
     {
         expression = WalkDownParentheses(expression);
         if (expression is not (IdentifierNameSyntax or MemberAccessExpressionSyntax
@@ -123,10 +119,12 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
                 RawKind: (int)SyntaxKind.SimpleMemberAccessExpression,
             }))
         {
+            operation = null!;
             return false;
         }
 
-        return IsSupportedTargetOperation(semanticModel.GetOperation(expression, cancellationToken));
+        operation = semanticModel.GetOperation(expression, cancellationToken)!;
+        return operation is not null && IsSupportedTargetOperation(operation);
     }
 
     private static bool IsSupportedTargetOperation(IOperation? operation)

@@ -40,10 +40,25 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeMemberAccess(SyntaxNodeAnalysisContext context)
     {
         var memberAccess = (MemberAccessExpressionSyntax)context.Node;
+        if (memberAccess.Parent is MemberAccessExpressionSyntax
+            {
+                RawKind: (int)SyntaxKind.SimpleMemberAccessExpression,
+                Expression: var parentExpression,
+            } && parentExpression == memberAccess ||
+            memberAccess.Parent is InvocationExpressionSyntax { Expression: var invocationExpression } invocation &&
+            invocationExpression == memberAccess &&
+            invocation.Parent is MemberAccessExpressionSyntax
+            {
+                RawKind: (int)SyntaxKind.SimpleMemberAccessExpression,
+                Expression: var invocationParentExpression,
+            } && invocationParentExpression == invocation)
+        {
+            return;
+        }
+
         var chain = GetOutermostChain(memberAccess);
         if (GetLastMemberAccess(chain) != memberAccess ||
-            chain.FirstAncestorOrSelf<StatementSyntax>() is null &&
-            chain.FirstAncestorOrSelf<ArrowExpressionClauseSyntax>() is null ||
+            !HasStatementOrArrowAncestor(chain) ||
             HasDirective(chain) ||
             !TryGetChainDots(chain, out var dots) ||
             dots.Count < 2)
@@ -64,6 +79,19 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
         }
 
         context.ReportDiagnostic(Diagnostic.Create(Rule, chain.GetLocation()));
+    }
+
+    private static bool HasStatementOrArrowAncestor(SyntaxNode node)
+    {
+        for (var current = node.Parent; current is not null; current = current.Parent)
+        {
+            if (current is StatementSyntax or ArrowExpressionClauseSyntax)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static int GetMaximumLineLength(SyntaxNodeAnalysisContext context)

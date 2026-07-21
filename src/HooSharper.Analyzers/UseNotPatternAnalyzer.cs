@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -27,19 +26,28 @@ public sealed class UseNotPatternAnalyzer : DiagnosticAnalyzer
     {
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.EnableConcurrentExecution();
-        context.RegisterSyntaxNodeAction(AnalyzeLogicalNot, SyntaxKind.LogicalNotExpression);
+        context.RegisterCompilationStartAction(static compilationContext =>
+        {
+            var expressionType = compilationContext.Compilation.GetTypeByMetadataName(
+                "System.Linq.Expressions.Expression`1");
+            compilationContext.RegisterSyntaxNodeAction(
+                nodeContext => AnalyzeLogicalNot(nodeContext, expressionType),
+                SyntaxKind.LogicalNotExpression);
+        });
     }
 
-    private static void AnalyzeLogicalNot(SyntaxNodeAnalysisContext context)
+    private static void AnalyzeLogicalNot(
+        SyntaxNodeAnalysisContext context,
+        INamedTypeSymbol? expressionType)
     {
         if (context.Node.SyntaxTree.Options is not CSharpParseOptions { LanguageVersion: >= LanguageVersion.CSharp9 } ||
-            IsWithinExpressionTree(context.Node, context.SemanticModel, context.CancellationToken) ||
             context.Node is not PrefixUnaryExpressionSyntax
             {
                 Operand: ParenthesizedExpressionSyntax { Expression: var expression },
             } logicalNot ||
             logicalNot.ContainsDirectives ||
-            !IsSupportedIsExpression(expression))
+            !IsSupportedIsExpression(expression) ||
+            IsWithinExpressionTree(context.Node, context.SemanticModel, expressionType, context.CancellationToken))
         {
             return;
         }
@@ -50,21 +58,25 @@ public sealed class UseNotPatternAnalyzer : DiagnosticAnalyzer
     private static bool IsWithinExpressionTree(
         SyntaxNode node,
         SemanticModel semanticModel,
+        INamedTypeSymbol? expressionType,
         System.Threading.CancellationToken cancellationToken)
     {
-        var expressionType = semanticModel.Compilation.GetTypeByMetadataName(
-            "System.Linq.Expressions.Expression`1");
         if (expressionType is null)
         {
             return false;
         }
-
-        return node.Ancestors()
-            .OfType<AnonymousFunctionExpressionSyntax>()
-            .Any(anonymousFunction =>
+        for (var ancestor = node.Parent; ancestor is not null; ancestor = ancestor.Parent)
+        {
+            if (ancestor is AnonymousFunctionExpressionSyntax anonymousFunction &&
                 semanticModel.GetTypeInfo(anonymousFunction, cancellationToken).ConvertedType is
                     INamedTypeSymbol convertedType &&
-                SymbolEqualityComparer.Default.Equals(convertedType.OriginalDefinition, expressionType));
+                SymbolEqualityComparer.Default.Equals(convertedType.OriginalDefinition, expressionType))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsSupportedIsExpression(ExpressionSyntax expression) => expression switch
@@ -74,6 +86,16 @@ public sealed class UseNotPatternAnalyzer : DiagnosticAnalyzer
         _ => false,
     };
 
-    internal static bool ContainsDesignation(PatternSyntax pattern) =>
-        pattern.DescendantNodesAndSelf().Any(node => node is VariableDesignationSyntax);
+    internal static bool ContainsDesignation(PatternSyntax pattern)
+    {
+        foreach (var node in pattern.DescendantNodesAndSelf())
+        {
+            if (node is VariableDesignationSyntax)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

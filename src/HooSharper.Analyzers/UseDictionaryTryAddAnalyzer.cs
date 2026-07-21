@@ -27,10 +27,24 @@ public sealed class UseDictionaryTryAddAnalyzer : DiagnosticAnalyzer
     {
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.EnableConcurrentExecution();
-        context.RegisterSyntaxNodeAction(AnalyzeIfStatement, SyntaxKind.IfStatement);
+        context.RegisterCompilationStartAction(static compilationContext =>
+        {
+            var dictionaryDefinition = compilationContext.Compilation.GetTypeByMetadataName(
+                "System.Collections.Generic.Dictionary`2");
+            if (dictionaryDefinition is null)
+            {
+                return;
+            }
+
+            compilationContext.RegisterSyntaxNodeAction(
+                nodeContext => AnalyzeIfStatement(nodeContext, dictionaryDefinition),
+                SyntaxKind.IfStatement);
+        });
     }
 
-    private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
+    private static void AnalyzeIfStatement(
+        SyntaxNodeAnalysisContext context,
+        INamedTypeSymbol dictionaryDefinition)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
         if (ifStatement.Else is not null || HasDirective(ifStatement) ||
@@ -67,29 +81,29 @@ public sealed class UseDictionaryTryAddAnalyzer : DiagnosticAnalyzer
         var containsKey = containsInvocation.ArgumentList.Arguments[0].Expression;
         var addKey = addInvocation.ArgumentList.Arguments[0].Expression;
         var value = addInvocation.ArgumentList.Arguments[1].Expression;
-        if (!IsCallbackStable(containsMember.Expression, context.SemanticModel, context.CancellationToken) ||
-            !IsCallbackStable(containsKey, context.SemanticModel, context.CancellationToken) ||
-            !SyntaxFactory.AreEquivalent(containsMember.Expression, addMember.Expression) ||
-            !SyntaxFactory.AreEquivalent(containsKey, addKey) ||
-            !IsCallbackStable(value, context.SemanticModel, context.CancellationToken) ||
-            !IsSideEffectFree(context.SemanticModel.GetOperation(value, context.CancellationToken)))
+        if (!SyntaxFactory.AreEquivalent(containsMember.Expression, addMember.Expression) ||
+            !SyntaxFactory.AreEquivalent(containsKey, addKey))
         {
             return;
         }
 
-        var dictionaryDefinition = context.SemanticModel.Compilation.GetTypeByMetadataName(
-            "System.Collections.Generic.Dictionary`2");
-        var receiverType = context.SemanticModel.GetTypeInfo(containsMember.Expression, context.CancellationToken).Type;
-        if (dictionaryDefinition is null || receiverType is not INamedTypeSymbol receiverNamedType ||
+        var receiverOperation = context.SemanticModel.GetOperation(containsMember.Expression, context.CancellationToken);
+        var keyOperation = context.SemanticModel.GetOperation(containsKey, context.CancellationToken);
+        var valueOperation = context.SemanticModel.GetOperation(value, context.CancellationToken);
+        if (!IsCallbackStableOperation(receiverOperation) ||
+            !IsCallbackStableOperation(keyOperation) ||
+            !IsCallbackStableOperation(valueOperation) ||
+            !IsSideEffectFree(valueOperation) ||
+            receiverOperation?.Type is not INamedTypeSymbol receiverNamedType ||
             !SymbolEqualityComparer.Default.Equals(receiverNamedType.OriginalDefinition, dictionaryDefinition))
         {
             return;
         }
 
-        var containsMethod = context.SemanticModel.GetSymbolInfo(containsInvocation, context.CancellationToken).Symbol as IMethodSymbol;
-        var addMethod = context.SemanticModel.GetSymbolInfo(addInvocation, context.CancellationToken).Symbol as IMethodSymbol;
-        if (!IsDictionaryMethod(containsMethod, dictionaryDefinition, "ContainsKey", 1) ||
-            !IsDictionaryMethod(addMethod, dictionaryDefinition, "Add", 2) ||
+        var containsOperation = context.SemanticModel.GetOperation(containsInvocation, context.CancellationToken) as IInvocationOperation;
+        var addOperation = context.SemanticModel.GetOperation(addInvocation, context.CancellationToken) as IInvocationOperation;
+        if (!IsDictionaryMethod(containsOperation?.TargetMethod, dictionaryDefinition, "ContainsKey", 1) ||
+            !IsDictionaryMethod(addOperation?.TargetMethod, dictionaryDefinition, "Add", 2) ||
             !HasSuitableTryAdd(receiverNamedType))
         {
             return;
@@ -129,11 +143,6 @@ public sealed class UseDictionaryTryAddAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    private static bool IsCallbackStable(
-        ExpressionSyntax expression,
-        SemanticModel semanticModel,
-        System.Threading.CancellationToken cancellationToken) =>
-        IsCallbackStableOperation(semanticModel.GetOperation(expression, cancellationToken));
 
     private static bool IsCallbackStableOperation(IOperation? operation)
     {

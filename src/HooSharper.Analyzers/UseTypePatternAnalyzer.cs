@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -80,14 +79,16 @@ public sealed class UseTypePatternAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        if (ifStatement.Else is not null && ContainsReference(ifStatement.Else.Statement, local, context.SemanticModel, context.CancellationToken))
+        if (ifStatement.Else is not null && ContainsReference(
+                ifStatement.Else.Statement, local, declarator.Identifier.ValueText, context.SemanticModel, context.CancellationToken))
         {
             return;
         }
 
         for (var index = statementIndex + 2; index < block.Statements.Count; index++)
         {
-            if (ContainsReference(block.Statements[index], local, context.SemanticModel, context.CancellationToken))
+            if (ContainsReference(
+                    block.Statements[index], local, declarator.Identifier.ValueText, context.SemanticModel, context.CancellationToken))
             {
                 return;
             }
@@ -139,11 +140,17 @@ public sealed class UseTypePatternAnalyzer : DiagnosticAnalyzer
     private static bool ContainsReference(
         SyntaxNode node,
         ILocalSymbol local,
+        string localName,
         SemanticModel semanticModel,
         System.Threading.CancellationToken cancellationToken)
     {
-        foreach (var identifier in node.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
+        foreach (var descendant in node.DescendantNodesAndSelf())
         {
+            if (descendant is not IdentifierNameSyntax identifier || identifier.Identifier.ValueText != localName)
+            {
+                continue;
+            }
+
             if (SymbolEqualityComparer.Default.Equals(
                     local,
                     semanticModel.GetSymbolInfo(identifier, cancellationToken).Symbol))

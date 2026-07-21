@@ -108,11 +108,12 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
                     break;
             }
 
-            foreach (var designation in statement.DescendantNodes(ShouldDescendInto)
-                         .OfType<SingleVariableDesignationSyntax>()
-                         .Where(designation => designation.Ancestors().OfType<BlockSyntax>().FirstOrDefault() == body))
+            foreach (var node in statement.DescendantNodes(ShouldDescendInto))
             {
-                movedNames.Add(designation.Identifier.ValueText);
+                if (node is SingleVariableDesignationSyntax designation && IsDirectlyContainedBy(designation, body))
+                {
+                    movedNames.Add(designation.Identifier.ValueText);
+                }
             }
         }
 
@@ -144,6 +145,19 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
                 {
                     return true;
                 }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsDirectlyContainedBy(SyntaxNode node, BlockSyntax body)
+    {
+        for (var current = node.Parent; current is not null; current = current.Parent)
+        {
+            if (current is BlockSyntax containingBlock)
+            {
+                return containingBlock == body;
             }
         }
 
