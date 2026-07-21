@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.3 (2026-07-21)
+
+### Other Changes
+
+- publish test coverage to Codecov (3070c0b)
+- enforce local coverage threshold (ee0197a)
+- raise analyzer coverage above 91 percent (7eb5c6c)
+
+### Performance
+
+- **benchmarks:** validate Roslyn workloads (c782bfa)
+
 ## 0.3.2 (2026-07-21)
 
 ### Other Changes
