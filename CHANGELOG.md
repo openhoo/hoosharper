@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 (2026-07-21)
+
+### Performance
+
+- optimize analyzers and add benchmarks (4267a45)
+
 ## 0.3.0 (2026-07-21)
 
 ### Other Changes
