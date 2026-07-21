@@ -125,6 +125,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     steps:
       - name: Checkout release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -165,6 +166,19 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
         run: test -f "artifacts/HooSharper.Analyzers.${RELEASE_VERSION}.nupkg"
+
+      - name: Log in to nuget.org
+        id: nuget-login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
+        with:
+          user: OpenHoo
+
+      - name: Publish to nuget.org
+        run: >-
+          dotnet nuget push artifacts/*.nupkg
+          --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}"
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate
 
       - name: Publish to GitHub Packages
         run: dotnet nuget push artifacts/*.nupkg --api-key "$GITHUB_TOKEN" --source github --skip-duplicate
