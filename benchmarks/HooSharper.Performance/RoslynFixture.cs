@@ -17,29 +17,57 @@ internal static class RoslynFixture
 
     public static ImmutableArray<MetadataReference> References { get; } = CreateReferences();
 
-    public static Project CreateProject(AdhocWorkspace workspace, string source, string name = "BenchmarkProject")
+    public static Project CreateProject(AdhocWorkspace workspace, string source, string name = "BenchmarkProject") =>
+        CreateProject(workspace, [new KeyValuePair<string, string>("Benchmark.cs", source)], name);
+
+    public static Project CreateProject(
+        AdhocWorkspace workspace,
+        IReadOnlyList<KeyValuePair<string, string>> sources,
+        string name = "BenchmarkProject")
     {
+        if (sources.Count == 0)
+        {
+            throw new ArgumentException("At least one source document is required.", nameof(sources));
+        }
+
         var projectId = ProjectId.CreateNewId(name);
-        var documentId = DocumentId.CreateNewId(projectId, "Benchmark.cs");
         var configId = DocumentId.CreateNewId(projectId, ".editorconfig");
-        var solution = workspace.CurrentSolution
-            .AddProject(ProjectInfo.Create(
-                projectId,
-                VersionStamp.Default,
-                name,
-                name,
-                LanguageNames.CSharp,
-                parseOptions: ParseOptions,
-                compilationOptions: CompilationOptions,
-                metadataReferences: References))
-            .AddDocument(documentId, "Benchmark.cs", SourceText.From(source), filePath: "/bench/Benchmark.cs")
-            .AddAnalyzerConfigDocument(
-                configId,
-                ".editorconfig",
-                SourceText.From("root = true\n\n[*.cs]\nhoosharper_max_line_length = 80\nindent_style = space\nindent_size = 4\n"),
-                filePath: "/bench/.editorconfig");
+        var solution = workspace.CurrentSolution.AddProject(ProjectInfo.Create(
+            projectId,
+            VersionStamp.Default,
+            name,
+            name,
+            LanguageNames.CSharp,
+            parseOptions: ParseOptions,
+            compilationOptions: CompilationOptions,
+            metadataReferences: References));
+
+        foreach (var source in sources)
+        {
+            var documentId = DocumentId.CreateNewId(projectId, source.Key);
+            solution = solution.AddDocument(
+                documentId,
+                source.Key,
+                SourceText.From(source.Value),
+                filePath: $"/bench/{source.Key}");
+        }
+
+        solution = solution.AddAnalyzerConfigDocument(
+            configId,
+            ".editorconfig",
+            SourceText.From("root = true\n\n[*.cs]\nhoosharper_max_line_length = 80\nindent_style = space\nindent_size = 4\n"),
+            filePath: "/bench/.editorconfig");
         return solution.GetProject(projectId)
             ?? throw new InvalidOperationException("Benchmark project could not be created.");
+    }
+
+    public static void ValidateNoCompilerErrors(Compilation compilation)
+    {
+        var errors = compilation.GetDiagnostics().Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error).ToArray();
+        if (errors.Length != 0)
+        {
+            throw new InvalidOperationException($"Generated fixture has compiler errors:{Environment.NewLine}{string.Join(Environment.NewLine, errors.Select(static diagnostic => diagnostic.ToString()))}");
+        }
     }
 
     public static async Task<(AdhocWorkspace Workspace, Document Document, Diagnostic Diagnostic)> CreateFixFixtureAsync(

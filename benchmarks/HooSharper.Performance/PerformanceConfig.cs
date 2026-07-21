@@ -16,3 +16,17 @@ internal sealed class PerformanceConfig : ManualConfig
         AddExporter(JsonExporter.Full);
     }
 }
+
+internal sealed class SingleInvocationPerformanceConfig : ManualConfig
+{
+    public SingleInvocationPerformanceConfig()
+    {
+        AddJob(Job.Default
+            .WithWarmupCount(5)
+            .WithIterationCount(12)
+            .WithInvocationCount(1)
+            .WithUnrollFactor(1)
+            .WithId("SingleInvocation"));
+        AddExporter(JsonExporter.Full);
+    }
+}
