@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0 (2026-07-21)
+
+### Features
+
+- **analyzers:** add automatic fixes (068ceb0)
+
 ## 0.1.0 (2026-07-21)
 
 ### Features
