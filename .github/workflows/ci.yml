@@ -85,9 +85,6 @@ jobs:
     name: Build and test
     needs: commitlint
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -103,7 +100,7 @@ jobs:
       - name: Build
         run: dotnet build HooSharper.slnx -c Release --no-restore
 
-      - name: Test
+      - name: Test with coverage
         run: >-
           dotnet test HooSharper.slnx
           -c Release
@@ -113,12 +110,20 @@ jobs:
           --
           DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          directory: TestResults
-          fail_ci_if_error: true
-          use_oidc: true
+      - name: Enforce line coverage
+        env:
+          COVERAGE_THRESHOLD: "89"
+        run: |
+          set -euo pipefail
+          coverage_file="$(find TestResults -type f -name coverage.cobertura.xml -print -quit)"
+          test -n "$coverage_file"
+          line_rate="$(sed -n 's/^[[:space:]]*<coverage line-rate="\([^"]*\)".*/\1/p' "$coverage_file")"
+          test -n "$line_rate"
+          awk -v rate="$line_rate" -v threshold="$COVERAGE_THRESHOLD" 'BEGIN {
+            actual = rate * 100
+            printf "Line coverage: %.2f%% (required: %.2f%%)\n", actual, threshold
+            if (actual < threshold) exit 1
+          }'
 
       - name: Pack
         run: dotnet pack src/HooSharper.Analyzers/HooSharper.Analyzers.csproj -c Release --no-build -o artifacts
