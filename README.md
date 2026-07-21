@@ -312,6 +312,31 @@ csharp_prefer_braces = false:warning
 
 HOO1002 remains independently configurable through `dotnet_diagnostic.HOO1002.severity`. The built-in option and HooSharper rule may both report in hosts that enable both analyzers. Disable one diagnostic if duplicate suggestions appear.
 
+### HOO1003-HOO1009: Additional automatic fixes
+
+All rules below use category `HooSharper.CodeStyle`, default to Info severity, are enabled by default, and support Fix All.
+
+| ID | Rule | Example |
+|---|---|---|
+| `HOO1003` | Remove a redundant `else` after a terminating branch | `if (!valid) return; else Work();` → `if (!valid) return; Work();` |
+| `HOO1004` | Replace a final nested loop condition with an early `continue` | `if (valid) { Work(); }` → `if (!valid) continue; Work();` |
+| `HOO1005` | Combine an `as` cast and null check into a type pattern | `var x = value as T; if (x is not null)` → `if (value is T x)` |
+| `HOO1006` | Simplify comparisons with boolean literals | `ready == false` → `!ready` |
+| `HOO1007` | Replace `ContainsKey` plus index access with `TryGetValue` | `map.ContainsKey(key)` and `map[key]` → `map.TryGetValue(key, out var value)` |
+| `HOO1008` | Replace a null check and assignment with `??=` | `if (cache is null) cache = Create();` → `cache ??= Create();` |
+| `HOO1009` | Replace a classic argument null guard with `ThrowIfNull` | `if (value is null) throw new ArgumentNullException(nameof(value));` → `ArgumentNullException.ThrowIfNull(value);` |
+
+The analyzers deliberately skip ambiguous transformations, including overloaded equality operators, nullable boolean comparisons, unstable expressions with side effects, directive-containing regions, mismatched symbols, and unavailable framework APIs. `HOO1007` is limited to standard `Dictionary<TKey, TValue>`/`IDictionary<TKey, TValue>` semantics; `HOO1009` only activates when `ArgumentNullException.ThrowIfNull` exists in the target compilation.
+
+Configure any rule independently:
+
+```ini
+[*.cs]
+dotnet_diagnostic.HOO1003.severity = warning
+dotnet_diagnostic.HOO1007.severity = suggestion
+dotnet_diagnostic.HOO1009.severity = none
+```
+
 ## Recommended configuration
 
 A reasonable starting point is:
@@ -324,6 +349,9 @@ dotnet_diagnostic.HOO1001.severity = suggestion
 # Enforce compact single-statement conditionals.
 dotnet_diagnostic.HOO1002.severity = warning
 csharp_prefer_braces = false:warning
+
+# Enable the conservative automatic-fix rules as suggestions.
+dotnet_analyzer_diagnostic.category-HooSharper.CodeStyle.severity = suggestion
 ```
 
 For CI enforcement:
