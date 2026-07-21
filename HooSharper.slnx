@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/HooSharper.Analyzers/HooSharper.Analyzers.csproj" />
+    <Project Path="src/HooSharper.CodeFixes/HooSharper.CodeFixes.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/HooSharper.Analyzers.Tests/HooSharper.Analyzers.Tests.csproj" />
