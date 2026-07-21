@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.2 (2026-07-21)
+
+### Other Changes
+
+- add HooSharper branding (2472386)
+
+### Bug Fixes
+
+- **release:** publish packages to nuget.org automatically (264f9b3)
+
 ## 0.3.1 (2026-07-21)
 
 ### Performance
