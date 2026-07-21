@@ -539,7 +539,8 @@ CI follows the shared OpenHoo release model:
 3. The solution is restored, built, tested, and packed with the SDK pinned in `global.json`.
 4. A successful non-release push to `main` triggers `.github/workflows/release.yml`.
 5. Hooversion calculates the next semantic version, updates `version` and `CHANGELOG.md`, creates a `chore(release):` commit and `v<version>` tag, pushes both, and creates the GitHub Release.
-6. The tagged source is rebuilt and the resulting NuGet package is published to GitHub Packages. The same package can be published to nuget.org through the trusted-publishing job in `.github/workflows/ci.yml`.
+6. The tagged source is rebuilt and published to GitHub Packages.
+7. After that succeeds, the release workflow automatically dispatches the trusted-publishing job in `.github/workflows/ci.yml` for the same tag and publishes the package to nuget.org.
 
 Version changes are derived from Conventional Commits:
 
