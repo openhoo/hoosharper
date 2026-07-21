@@ -43,7 +43,7 @@ public sealed class PreferLoopContinueAnalyzerTests
                     foreach (var value in values)
                     {
                         Prepare(value);
-                        if (value <= 0)
+                        if (!(value > 0))
                             continue;
                         Execute(value);
                         Finish(value);
@@ -295,4 +295,45 @@ public sealed class PreferLoopContinueAnalyzerTests
 
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
     }
+    [Fact]
+    public Task PreservesFloatingPointNaNSemantics()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(double[] values)
+                {
+                    foreach (var value in values)
+                    {
+                        {|#0:if|} (value > 0)
+                        {
+                            Execute(value);
+                        }
+                    }
+                }
+
+                void Execute(double value) { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(double[] values)
+                {
+                    foreach (var value in values)
+                    {
+                        if (!(value > 0))
+                            continue;
+                        Execute(value);
+                    }
+                }
+
+                void Execute(double value) { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(PreferLoopContinueAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
 }

@@ -150,6 +150,41 @@ public sealed class PreferEarlyReturnAnalyzerTests
     }
 
     [Fact]
+    public Task PreservesFloatingPointNaNSemantics()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(double value)
+                {
+                    {|#0:if|} (value > 0)
+                    {
+                        Execute();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(double value)
+                {
+                    if (!(value > 0))
+                        return;
+                    Execute();
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(PreferEarlyReturnAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
     public Task DoesNotReportValueReturningMethod()
     {
         const string source = """

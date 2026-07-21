@@ -45,7 +45,9 @@ public sealed class OmitBracesForSingleLineIfCodeFixProvider : CodeFixProvider
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-        if (root is null || block.Statements.Count != 1)
+        if (root is null || block.Statements.Count != 1 ||
+            block.Parent is IfStatementSyntax { Statement: var thenStatement, Else: not null } &&
+            thenStatement == block && block.Statements[0] is IfStatementSyntax { Else: null })
         {
             return document;
         }

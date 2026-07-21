@@ -1,8 +1,8 @@
 # HooSharper
 
-HooSharper is an open-source collection of Roslyn analyzers and code fixes for opinionated C# formatting and code style. It aims to provide the everyday inspections and quick-fixes developers commonly rely on ReSharper for, while running through the standard .NET compiler and IDE analyzer infrastructure.
+HooSharper is an open-source collection of Roslyn analyzers and code fixes for opinionated C# code style. It brings focused, conservative inspections and quick fixes to the standard .NET compiler and IDE analyzer infrastructure.
 
-The package currently focuses on guard clauses and compact single-statement conditionals.
+The package currently ships nine rules covering guard clauses, compact conditionals, redundant control flow, type patterns, boolean expressions, dictionary lookups, null-coalescing assignment, and argument validation.
 
 ## Requirements
 
@@ -33,7 +33,7 @@ For central package management, add the version to `Directory.Packages.props`:
 ```xml
 <Project>
   <ItemGroup>
-    <PackageVersion Include="HooSharper.Analyzers" Version="1.0.0" />
+    <PackageVersion Include="HooSharper.Analyzers" Version="0.2.0" />
   </ItemGroup>
 </Project>
 ```
@@ -51,7 +51,7 @@ Without central package management:
 ```xml
 <ItemGroup>
   <PackageReference Include="HooSharper.Analyzers"
-                    Version="1.0.0"
+                    Version="0.2.0"
                     PrivateAssets="all" />
 </ItemGroup>
 ```
@@ -79,7 +79,7 @@ dotnet nuget add source /absolute/path/to/hoosharper/artifacts \
   --name HooSharperLocal
 
 dotnet add package HooSharper.Analyzers \
-  --version 1.0.0 \
+  --version 0.2.0 \
   --source /absolute/path/to/hoosharper/artifacts
 ```
 
@@ -105,7 +105,7 @@ After adding the package:
 4. Open Quick Actions. In Visual Studio and VS Code this is normally `Ctrl+.`; Rider commonly uses `Alt+Enter`.
 5. Select the HooSharper action.
 
-Both current fixers use Roslyn's batch Fix All provider. Where the host supports it, the action can be applied to the document, project, or solution.
+All current fixers use Roslyn's batch Fix All provider. Where the host supports it, an action can be applied to the document, project, or solution.
 
 Analyzer diagnostics also run during `dotnet build`. Code fixes are interactive IDE operations; a command-line build reports diagnostics but does not rewrite source files.
 
@@ -134,7 +134,7 @@ dotnet_diagnostic.HOO1001.severity = warning
 dotnet_diagnostic.HOO1002.severity = suggestion
 ```
 
-Both current diagnostics are enabled by default with Roslyn `Info` severity.
+All current diagnostics are enabled by default with Roslyn `Info` severity.
 
 ### Disable a rule
 
@@ -227,7 +227,7 @@ The fixer simplifies common negations and comparisons. Examples include:
 ```csharp
 if (!disabled)  // becomes: if (disabled) return;
 if (value == 0) // becomes: if (value != 0) return;
-if (value < 10) // becomes: if (value >= 10) return;
+if (value < 10) // becomes: if (!(value < 10)) return;
 ```
 
 The current implementation is intentionally conservative. A diagnostic is reported only when all of these conditions hold:
@@ -362,7 +362,7 @@ dotnet_diagnostic.HOO1001.severity = warning
 dotnet_diagnostic.HOO1002.severity = warning
 ```
 
-Projects using `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>` will fail when either rule is configured as a warning.
+Projects using `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>` will fail when any HooSharper rule is configured as a warning.
 
 ## Development
 
@@ -418,7 +418,7 @@ Each rule has:
 - One analyzer file
 - One code-fix provider file
 - One dedicated test file
-- One entry in `AnalyzerReleases.Unshipped.md`
+- One entry in `AnalyzerReleases.Unshipped.md`, moved to `AnalyzerReleases.Shipped.md` when released
 
 Analyzer rules use the `HOO` diagnostic prefix.
 
@@ -460,7 +460,7 @@ The analyzer assembly is loaded by the compiler and IDE. The code-fix assembly i
 Inspect a locally produced package with:
 
 ```bash
-unzip -l artifacts/HooSharper.Analyzers.1.0.0.nupkg
+unzip -l artifacts/HooSharper.Analyzers.0.2.0.nupkg
 ```
 
 ### Continuous releases
@@ -511,7 +511,7 @@ The Hooversion action and installation source are pinned to the audited `v0.2.0`
 2. Add one analyzer under `src/HooSharper.Analyzers`.
 3. Add one code-fix provider under `src/HooSharper.CodeFixes` when the transformation is safe and deterministic.
 4. Add a dedicated test file under `tests/HooSharper.Analyzers.Tests`.
-5. Register the rule in `src/HooSharper.Analyzers/AnalyzerReleases.Unshipped.md`.
+5. Register the rule in `src/HooSharper.Analyzers/AnalyzerReleases.Unshipped.md`; move it to `AnalyzerReleases.Shipped.md` when the release ships.
 6. Document the rule and its configuration in this README.
 7. Run the full build, tests, and package verification.
 

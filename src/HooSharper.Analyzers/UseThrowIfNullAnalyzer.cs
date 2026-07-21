@@ -139,18 +139,13 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
         ExpressionSyntax checkedExpression,
         SyntaxNodeAnalysisContext context)
     {
-        if (expression is not InvocationExpressionSyntax
-            {
-                Expression: IdentifierNameSyntax { Identifier.ValueText: "nameof" },
-                ArgumentList.Arguments.Count: 1,
-            } nameOf)
+        if (context.SemanticModel.GetOperation(expression, context.CancellationToken) is not INameOfOperation nameOf)
         {
             return false;
         }
 
-        var namedExpression = WalkDownParentheses(nameOf.ArgumentList.Arguments[0].Expression);
         var checkedSymbol = context.SemanticModel.GetSymbolInfo(checkedExpression, context.CancellationToken).Symbol;
-        var namedSymbol = context.SemanticModel.GetSymbolInfo(namedExpression, context.CancellationToken).Symbol;
+        var namedSymbol = context.SemanticModel.GetSymbolInfo(nameOf.Argument.Syntax, context.CancellationToken).Symbol;
         return checkedSymbol is not null && SymbolEqualityComparer.Default.Equals(checkedSymbol, namedSymbol);
     }
 

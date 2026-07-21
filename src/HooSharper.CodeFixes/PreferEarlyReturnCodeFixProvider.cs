@@ -78,16 +78,10 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
         {
             PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression } logicalNot =>
                 WalkDownParentheses(logicalNot.Operand).WithoutTrivia(),
-            BinaryExpressionSyntax binary => binary.Kind() switch
-            {
-                SyntaxKind.EqualsExpression => binary.WithOperatorToken(SyntaxFactory.Token(SyntaxKind.ExclamationEqualsToken)),
-                SyntaxKind.NotEqualsExpression => binary.WithOperatorToken(SyntaxFactory.Token(SyntaxKind.EqualsEqualsToken)),
-                SyntaxKind.LessThanExpression => binary.WithOperatorToken(SyntaxFactory.Token(SyntaxKind.GreaterThanEqualsToken)),
-                SyntaxKind.LessThanOrEqualExpression => binary.WithOperatorToken(SyntaxFactory.Token(SyntaxKind.GreaterThanToken)),
-                SyntaxKind.GreaterThanExpression => binary.WithOperatorToken(SyntaxFactory.Token(SyntaxKind.LessThanEqualsToken)),
-                SyntaxKind.GreaterThanOrEqualExpression => binary.WithOperatorToken(SyntaxFactory.Token(SyntaxKind.LessThanToken)),
-                _ => ParenthesizedNegation(condition),
-            },
+            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.EqualsExpression) =>
+                binary.WithOperatorToken(SyntaxFactory.Token(SyntaxKind.ExclamationEqualsToken)),
+            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.NotEqualsExpression) =>
+                binary.WithOperatorToken(SyntaxFactory.Token(SyntaxKind.EqualsEqualsToken)),
             IdentifierNameSyntax or MemberAccessExpressionSyntax or InvocationExpressionSyntax =>
                 SyntaxFactory.PrefixUnaryExpression(SyntaxKind.LogicalNotExpression, condition),
             _ => ParenthesizedNegation(condition),

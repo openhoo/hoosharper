@@ -296,6 +296,27 @@ public sealed class UseThrowIfNullAnalyzerTests
     }
 
     [Fact]
+    public Task DoesNotReportUserMethodNamedNameof()
+    {
+        const string source = """
+            using System;
+
+            class Example
+            {
+                string nameof(object value) => "other";
+
+                void Run(object argument)
+                {
+                    if (argument is null)
+                        throw new ArgumentNullException(nameof(argument));
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
     public Task DoesNotReportElseBranchOrDirectives()
     {
         const string source = """

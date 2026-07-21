@@ -32,15 +32,15 @@ public sealed class OmitBracesForSingleLineIfAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
-        ReportIfSafe(context, ifStatement.Statement);
+        ReportIfSafe(context, ifStatement.Statement, ifStatement.Else is not null);
 
         if (ifStatement.Else is { Statement: not IfStatementSyntax } elseClause)
         {
-            ReportIfSafe(context, elseClause.Statement);
+            ReportIfSafe(context, elseClause.Statement, hasFollowingElse: false);
         }
     }
 
-    private static void ReportIfSafe(SyntaxNodeAnalysisContext context, StatementSyntax statement)
+    private static void ReportIfSafe(SyntaxNodeAnalysisContext context, StatementSyntax statement, bool hasFollowingElse)
     {
         if (statement is not BlockSyntax { Statements.Count: 1 } block)
         {
@@ -48,7 +48,9 @@ public sealed class OmitBracesForSingleLineIfAnalyzer : DiagnosticAnalyzer
         }
 
         var nestedStatement = block.Statements[0];
-        if (nestedStatement is LocalDeclarationStatementSyntax or LocalFunctionStatementSyntax || HasDirective(block))
+        if (nestedStatement is LocalDeclarationStatementSyntax or LocalFunctionStatementSyntax ||
+            hasFollowingElse && nestedStatement is IfStatementSyntax { Else: null } ||
+            HasDirective(block))
         {
             return;
         }

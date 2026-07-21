@@ -134,6 +134,31 @@ public sealed class OmitBracesForSingleLineIfAnalyzerTests
     }
 
     [Fact]
+    public Task KeepsBracesWhenElseWouldBindToNestedIf()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool outer, bool inner)
+                {
+                    if (outer)
+                    {
+                        if (inner)
+                            Execute();
+                    }
+                    else
+                        Finish();
+                }
+
+                void Execute() { }
+                void Finish() { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
     public Task KeepsBracesForLocalDeclaration()
     {
         const string source = """

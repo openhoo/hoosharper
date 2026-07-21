@@ -120,16 +120,10 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
         {
             PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression } logicalNot =>
                 WalkDownParentheses(logicalNot.Operand).WithoutTrivia(),
-            BinaryExpressionSyntax binary => binary.Kind() switch
-            {
-                SyntaxKind.EqualsExpression => ReplaceOperator(binary, SyntaxKind.NotEqualsExpression, SyntaxKind.ExclamationEqualsToken),
-                SyntaxKind.NotEqualsExpression => ReplaceOperator(binary, SyntaxKind.EqualsExpression, SyntaxKind.EqualsEqualsToken),
-                SyntaxKind.LessThanExpression => ReplaceOperator(binary, SyntaxKind.GreaterThanOrEqualExpression, SyntaxKind.GreaterThanEqualsToken),
-                SyntaxKind.LessThanOrEqualExpression => ReplaceOperator(binary, SyntaxKind.GreaterThanExpression, SyntaxKind.GreaterThanToken),
-                SyntaxKind.GreaterThanExpression => ReplaceOperator(binary, SyntaxKind.LessThanOrEqualExpression, SyntaxKind.LessThanEqualsToken),
-                SyntaxKind.GreaterThanOrEqualExpression => ReplaceOperator(binary, SyntaxKind.LessThanExpression, SyntaxKind.LessThanToken),
-                _ => ParenthesizedNegation(condition),
-            },
+            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.EqualsExpression) =>
+                ReplaceOperator(binary, SyntaxKind.NotEqualsExpression, SyntaxKind.ExclamationEqualsToken),
+            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.NotEqualsExpression) =>
+                ReplaceOperator(binary, SyntaxKind.EqualsExpression, SyntaxKind.EqualsEqualsToken),
             IdentifierNameSyntax or MemberAccessExpressionSyntax or InvocationExpressionSyntax =>
                 SyntaxFactory.PrefixUnaryExpression(SyntaxKind.LogicalNotExpression, condition),
             _ => ParenthesizedNegation(condition),
