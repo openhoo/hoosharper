@@ -1,6 +1,9 @@
 ![HooSharper](https://raw.githubusercontent.com/openhoo/hoosharper/main/docs/assets/hoosharper-readme-header.png)
 
-[![NuGet](https://img.shields.io/nuget/v/HooSharper.Analyzers.svg)](https://www.nuget.org/packages/HooSharper.Analyzers/)
+[![CI](https://github.com/openhoo/hoosharper/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/openhoo/hoosharper/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/openhoo/hoosharper/branch/main/graph/badge.svg)](https://codecov.io/gh/openhoo/hoosharper)
+[![NuGet](https://img.shields.io/nuget/v/HooSharper.Analyzers.svg?logo=nuget)](https://www.nuget.org/packages/HooSharper.Analyzers/)
+[![License](https://img.shields.io/github/license/openhoo/hoosharper.svg)](LICENSE)
 
 HooSharper is an open-source collection of Roslyn analyzers and code fixes for opinionated C# code style. It brings focused, conservative inspections and quick fixes to the standard .NET compiler and IDE analyzer infrastructure.
 

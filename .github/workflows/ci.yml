@@ -85,6 +85,9 @@ jobs:
     name: Build and test
     needs: commitlint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -101,7 +104,21 @@ jobs:
         run: dotnet build HooSharper.slnx -c Release --no-restore
 
       - name: Test
-        run: dotnet test HooSharper.slnx -c Release --no-build
+        run: >-
+          dotnet test HooSharper.slnx
+          -c Release
+          --no-build
+          --collect:"XPlat Code Coverage"
+          --results-directory TestResults
+          --
+          DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          directory: TestResults
+          fail_ci_if_error: true
+          use_oidc: true
 
       - name: Pack
         run: dotnet pack src/HooSharper.Analyzers/HooSharper.Analyzers.csproj -c Release --no-build -o artifacts
