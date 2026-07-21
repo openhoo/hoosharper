@@ -1,5 +1,7 @@
 # HooSharper
 
+[![NuGet](https://img.shields.io/nuget/v/HooSharper.Analyzers.svg)](https://www.nuget.org/packages/HooSharper.Analyzers/)
+
 HooSharper is an open-source collection of Roslyn analyzers and code fixes for opinionated C# code style. It brings focused, conservative inspections and quick fixes to the standard .NET compiler and IDE analyzer infrastructure.
 
 The package currently ships nine rules covering guard clauses, compact conditionals, redundant control flow, type patterns, boolean expressions, dictionary lookups, null-coalescing assignment, and argument validation.
