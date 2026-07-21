@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.5 (2026-07-21)
+
+### Performance
+
+- **analyzers:** reduce fluent chain allocations (8ef2dd1)
+
+### Bug Fixes
+
+- **analyzers:** restore coverage gate (be2a4b1)
+
 ## 0.3.4 (2026-07-21)
 
 ### Performance
