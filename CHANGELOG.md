@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 (2026-07-21)
+
+### Other Changes
+
+- add nuget badge (554169f)
+
+### Features
+
+- **analyzers:** add modern code fixes (bd5db47)
+
 ## 0.2.2 (2026-07-21)
 
 ### Other Changes
