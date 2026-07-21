@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.4 (2026-07-21)
+
+### Performance
+
+- **analyzers:** reduce semantic binding (632b95d)
+
 ## 0.3.3 (2026-07-21)
 
 ### Other Changes
