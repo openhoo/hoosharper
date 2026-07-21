@@ -506,6 +506,38 @@ public sealed class UseDictionaryTryAddAnalyzerTests
     }
 
     [Fact]
+    public Task IgnoresUserDefinedImplicitKeyConversion()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            sealed class Key
+            {
+                public static int ConversionCount;
+                public string Value { get; }
+
+                public Key(string value) => Value = value;
+
+                public static implicit operator string(Key key)
+                {
+                    ConversionCount++;
+                    return key.Value;
+                }
+            }
+
+            class C
+            {
+                void M(Dictionary<string, int> dictionary, Key key)
+                {
+                    if (!dictionary.ContainsKey((key))) { dictionary.Add((key), 1); }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
     public Task IgnoresMismatchedReceiverAndKey()
     {
         const string source = """

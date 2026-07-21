@@ -246,6 +246,38 @@ public sealed class UseHashSetAddResultAnalyzerTests
     }
 
     [Fact]
+    public Task IgnoresSideEffectingUserDefinedImplicitConversion()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            readonly struct Value
+            {
+                public static int ConversionCount;
+
+                public static implicit operator int(Value value)
+                {
+                    ConversionCount++;
+                    return ConversionCount;
+                }
+            }
+
+            class Example
+            {
+                void Run(HashSet<int> set, Value value)
+                {
+                    if (!set.Contains((value)))
+                    {
+                        set.Add((value));
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
     public Task IgnoresVolatileReceiverAndValueRecursively()
     {
         const string source = """

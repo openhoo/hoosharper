@@ -87,23 +87,23 @@ public sealed class UseDictionaryTryAddAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var receiverOperation = context.SemanticModel.GetOperation(containsMember.Expression, context.CancellationToken);
-        var keyOperation = context.SemanticModel.GetOperation(containsKey, context.CancellationToken);
-        var valueOperation = context.SemanticModel.GetOperation(value, context.CancellationToken);
+        var containsOperation = context.SemanticModel.GetOperation(containsInvocation, context.CancellationToken) as IInvocationOperation;
+        var addOperation = context.SemanticModel.GetOperation(addInvocation, context.CancellationToken) as IInvocationOperation;
+        if (!IsDictionaryMethod(containsOperation?.TargetMethod, dictionaryDefinition, "ContainsKey", 1) ||
+            !IsDictionaryMethod(addOperation?.TargetMethod, dictionaryDefinition, "Add", 2))
+        {
+            return;
+        }
+
+        var receiverOperation = containsOperation!.Instance;
+        var keyOperation = containsOperation.Arguments[0].Value;
+        var valueOperation = addOperation!.Arguments[1].Value;
         if (!IsCallbackStableOperation(receiverOperation) ||
             !IsCallbackStableOperation(keyOperation) ||
             !IsCallbackStableOperation(valueOperation) ||
             !IsSideEffectFree(valueOperation) ||
             receiverOperation?.Type is not INamedTypeSymbol receiverNamedType ||
-            !SymbolEqualityComparer.Default.Equals(receiverNamedType.OriginalDefinition, dictionaryDefinition))
-        {
-            return;
-        }
-
-        var containsOperation = context.SemanticModel.GetOperation(containsInvocation, context.CancellationToken) as IInvocationOperation;
-        var addOperation = context.SemanticModel.GetOperation(addInvocation, context.CancellationToken) as IInvocationOperation;
-        if (!IsDictionaryMethod(containsOperation?.TargetMethod, dictionaryDefinition, "ContainsKey", 1) ||
-            !IsDictionaryMethod(addOperation?.TargetMethod, dictionaryDefinition, "Add", 2) ||
+            !SymbolEqualityComparer.Default.Equals(receiverNamedType.OriginalDefinition, dictionaryDefinition) ||
             !HasSuitableTryAdd(receiverNamedType))
         {
             return;
@@ -162,17 +162,20 @@ public sealed class UseDictionaryTryAddAnalyzer : DiagnosticAnalyzer
 
     private static IOperation? Unwrap(IOperation? operation)
     {
-        while (operation is IConversionOperation { IsImplicit: true } conversion)
+        while (true)
         {
-            operation = conversion.Operand;
+            switch (operation)
+            {
+                case IConversionOperation { IsImplicit: true, OperatorMethod: null } conversion:
+                    operation = conversion.Operand;
+                    break;
+                case IParenthesizedOperation parenthesized:
+                    operation = parenthesized.Operand;
+                    break;
+                default:
+                    return operation;
+            }
         }
-
-        while (operation is IParenthesizedOperation parenthesized)
-        {
-            operation = parenthesized.Operand;
-        }
-
-        return operation;
     }
 
     private static bool IsSideEffectFree(IOperation? operation) => operation switch

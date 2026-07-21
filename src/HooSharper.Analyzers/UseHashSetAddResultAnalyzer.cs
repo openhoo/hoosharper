@@ -74,20 +74,20 @@ public sealed class UseHashSetAddResultAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var receiverOperation = context.SemanticModel.GetOperation(containsMember.Expression, context.CancellationToken);
-        var valueOperation = context.SemanticModel.GetOperation(containsValue, context.CancellationToken);
-        if (!IsCallbackStableOperation(receiverOperation) ||
-            !IsCallbackStableOperation(valueOperation) ||
-            receiverOperation?.Type is not INamedTypeSymbol namedReceiver ||
-            !SymbolEqualityComparer.Default.Equals(namedReceiver.OriginalDefinition, hashSetDefinition))
-        {
-            return;
-        }
-
         var containsOperation = context.SemanticModel.GetOperation(containsInvocation, context.CancellationToken) as IInvocationOperation;
         var addOperation = context.SemanticModel.GetOperation(addInvocation, context.CancellationToken) as IInvocationOperation;
         if (!IsHashSetMethod(containsOperation?.TargetMethod, hashSetDefinition, "Contains") ||
             !IsHashSetMethod(addOperation?.TargetMethod, hashSetDefinition, "Add"))
+        {
+            return;
+        }
+
+        var receiverOperation = containsOperation!.Instance;
+        var valueOperation = containsOperation.Arguments[0].Value;
+        if (!IsCallbackStableOperation(receiverOperation) ||
+            !IsCallbackStableOperation(valueOperation) ||
+            receiverOperation?.Type is not INamedTypeSymbol namedReceiver ||
+            !SymbolEqualityComparer.Default.Equals(namedReceiver.OriginalDefinition, hashSetDefinition))
         {
             return;
         }
@@ -152,17 +152,20 @@ public sealed class UseHashSetAddResultAnalyzer : DiagnosticAnalyzer
 
     private static IOperation? Unwrap(IOperation? operation)
     {
-        while (operation is IConversionOperation { IsImplicit: true } conversion)
+        while (true)
         {
-            operation = conversion.Operand;
+            switch (operation)
+            {
+                case IConversionOperation { IsImplicit: true, OperatorMethod: null } conversion:
+                    operation = conversion.Operand;
+                    break;
+                case IParenthesizedOperation parenthesized:
+                    operation = parenthesized.Operand;
+                    break;
+                default:
+                    return operation;
+            }
         }
-
-        while (operation is IParenthesizedOperation parenthesized)
-        {
-            operation = parenthesized.Operand;
-        }
-
-        return operation;
     }
 
     private static ExpressionSyntax WalkDownParentheses(ExpressionSyntax expression)

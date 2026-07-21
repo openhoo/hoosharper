@@ -46,13 +46,16 @@ public sealed class UseStringContainsAnalyzer : DiagnosticAnalyzer
             {
                 OperatorMethod: null,
                 Type.SpecialType: SpecialType.System_Boolean,
-            } ||
-            context.SemanticModel.GetSymbolInfo(invocation, context.CancellationToken).Symbol is not IMethodSymbol
+            } binaryOperation ||
+            (comparison.Left == invocation ? binaryOperation.LeftOperand : binaryOperation.RightOperand) is not IInvocationOperation
             {
-                Name: "IndexOf",
-                IsStatic: false,
-                ContainingType.SpecialType: SpecialType.System_String,
-            } indexOfMethod ||
+                TargetMethod:
+                {
+                    Name: "IndexOf",
+                    IsStatic: false,
+                    ContainingType.SpecialType: SpecialType.System_String,
+                } indexOfMethod,
+            } ||
             !HasMatchingContainsOverload(indexOfMethod))
         {
             return;
