@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: 1.3.14
+  HOOVERSION_SHA: 799ecf4a9c29e8ce4d5ad7055a6030adf665cf82 # v0.2.0
+
+jobs:
+  commitlint:
+    name: Conventional Commits
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install Commitlint
+        run: bun install --frozen-lockfile
+
+      - name: Run Commitlint
+        env:
+          FROM_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          TO_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$FROM_SHA" = "0000000000000000000000000000000000000000" ]; then
+            bunx --no-install commitlint --last --verbose
+          else
+            bunx --no-install commitlint --from "$FROM_SHA" --to "$TO_SHA" --verbose
+          fi
+
+      - name: Install Hooversion
+        run: |
+          set -euo pipefail
+          install_dir="$(mktemp -d "$RUNNER_TEMP/hooversion.XXXXXXXX")"
+          echo "HOOVERSION_DIR=$install_dir" >> "$GITHUB_ENV"
+          git init "$install_dir"
+          git -C "$install_dir" fetch --depth 1 https://github.com/openhoo/hooversion.git "$HOOVERSION_SHA"
+          git -C "$install_dir" checkout --detach FETCH_HEAD
+          test "$(git -C "$install_dir" rev-parse HEAD)" = "$HOOVERSION_SHA"
+          cd "$install_dir"
+          bun install --frozen-lockfile
+
+      - name: Lint commits
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            bun "$HOOVERSION_DIR/src/cli.ts" lint \
+              --from "${{ github.event.pull_request.base.sha }}" \
+              --to "${{ github.event.pull_request.head.sha }}"
+          else
+            bun "$HOOVERSION_DIR/src/cli.ts" lint --last
+          fi
+
+      - name: Remove Hooversion checkout
+        if: always()
+        run: test -z "${HOOVERSION_DIR:-}" || rm -rf "$HOOVERSION_DIR"
+
+  build:
+    name: Build and test
+    needs: commitlint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore HooSharper.slnx
+
+      - name: Build
+        run: dotnet build HooSharper.slnx -c Release --no-restore
+
+      - name: Test
+        run: dotnet test HooSharper.slnx -c Release --no-build
+
+      - name: Pack
+        run: dotnet pack src/HooSharper.Analyzers/HooSharper.Analyzers.csproj -c Release --no-build -o artifacts
+
+      - name: Upload package
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: HooSharper.Analyzers
+          path: artifacts/*.nupkg
+          if-no-files-found: error

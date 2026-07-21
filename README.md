@@ -14,12 +14,18 @@ The analyzer package targets `netstandard2.0` so it can run in a broad range of 
 
 ## Installation
 
-### Install from NuGet
+### Install from GitHub Packages
 
-Once the package is published, add it to each project that should be analyzed:
+Releases are published to the OpenHoo GitHub Packages NuGet registry. Authenticate with a GitHub personal access token that has at least `read:packages`, then add the source:
 
 ```bash
-dotnet add package HooSharper.Analyzers
+dotnet nuget add source https://nuget.pkg.github.com/openhoo/index.json \
+  --name openhoo \
+  --username YOUR_GITHUB_USERNAME \
+  --password YOUR_GITHUB_TOKEN \
+  --store-password-in-clear-text
+
+dotnet add package HooSharper.Analyzers --source openhoo
 ```
 
 For central package management, add the version to `Directory.Packages.props`:
@@ -51,6 +57,8 @@ Without central package management:
 ```
 
 `PrivateAssets="all"` prevents an application or library from exposing HooSharper as a transitive runtime dependency. The package contains both the analyzer assembly and its code-fix assembly under `analyzers/dotnet/cs`.
+
+GitHub Packages requires authentication even when the repository is public. Do not commit a personal token to `NuGet.config`; configure credentials in the user-level NuGet configuration or through CI secrets.
 
 ### Install a locally built package
 
@@ -335,10 +343,21 @@ Clone and build:
 ```bash
 git clone https://github.com/openhoo/hoosharper.git
 cd hoosharper
+bun install --frozen-lockfile
+
 dotnet restore HooSharper.slnx
 dotnet build HooSharper.slnx
 dotnet test HooSharper.slnx
 ```
+
+`bun install` activates the Husky `commit-msg` hook. Every local commit is checked by Commitlint using `@commitlint/config-conventional`; CI validates the complete pull-request or push commit range again. Run it manually with:
+
+```bash
+echo "feat(analyzers): add a rule" | bunx --no-install commitlint
+bunx --no-install commitlint --from origin/main --to HEAD --verbose
+```
+
+Commitlint enforces message structure, while Hooversion applies OpenHoo's release semantics and package routing. Both checks must pass.
 
 Run a release build and package:
 
@@ -415,6 +434,48 @@ Inspect a locally produced package with:
 ```bash
 unzip -l artifacts/HooSharper.Analyzers.1.0.0.nupkg
 ```
+
+### Continuous releases
+
+CI follows the shared OpenHoo release model:
+
+1. `.github/workflows/ci.yml` runs on pull requests and pushes to `main`.
+2. Hooversion validates every commit against the Conventional Commits format.
+3. The solution is restored, built, tested, and packed with the SDK pinned in `global.json`.
+4. A successful non-release push to `main` triggers `.github/workflows/release.yml`.
+5. Hooversion calculates the next semantic version, updates `version` and `CHANGELOG.md`, creates a `chore(release):` commit and `v<version>` tag, pushes both, and creates the GitHub Release.
+6. The tagged source is rebuilt and the resulting NuGet package is published to GitHub Packages.
+
+Version changes are derived from Conventional Commits:
+
+- `feat:` creates a minor release.
+- `fix:` and `perf:` create a patch release.
+- A `!` after the type or scope, or a `BREAKING CHANGE:` footer, creates a major release.
+- `docs:`, `test:`, `ci:`, `chore:`, and other non-release types do not create a version by themselves.
+
+Examples:
+
+```text
+feat(analyzers): add expression-bodied member rule
+fix(code-fixes): preserve comments around removed braces
+feat!: rename diagnostic categories
+```
+
+The package version has one source of truth: the repository-root `version` file. `Directory.Build.props` reads it into MSBuild's `VersionPrefix`, and Hooversion owns release-time updates. Do not manually edit `version`, `CHANGELOG.md`, release tags, or release commits for a normal release.
+
+The release workflow uses the repository `GITHUB_TOKEN`; no long-lived package publishing secret is required. Required job permissions are limited to `contents: write` for Hooversion and `packages: write` for NuGet publication.
+
+To preview a release without creating commits, tags, releases, or packages, run the **Release** workflow manually with `dry_run` enabled. For local inspection, check out the same pinned Hooversion revision used by CI:
+
+```bash
+git clone https://github.com/openhoo/hooversion.git /tmp/hooversion
+git -C /tmp/hooversion checkout 799ecf4a9c29e8ce4d5ad7055a6030adf665cf82
+(cd /tmp/hooversion && bun install --frozen-lockfile)
+bun /tmp/hooversion/src/cli.ts plan
+bun /tmp/hooversion/src/cli.ts release --dry-run
+```
+
+The Hooversion action and installation source are pinned to the audited `v0.2.0` commit. Update that SHA deliberately in both workflows when upgrading Hooversion.
 
 ## Contributing a rule
 
