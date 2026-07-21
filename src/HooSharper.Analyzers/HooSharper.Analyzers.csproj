@@ -13,6 +13,7 @@
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>hoosharper-logo.png</PackageIcon>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>https://github.com/openhoo/hoosharper</RepositoryUrl>
@@ -36,6 +37,7 @@
     <None Include="$(OutputPath)$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
     <None Include="..\HooSharper.CodeFixes\bin\$(Configuration)\netstandard2.0\HooSharper.CodeFixes.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
     <None Include="..\..\README.md" Pack="true" PackagePath="\" Link="README.md" />
+    <None Include="../../docs/assets/hoosharper-logo.png" Pack="true" PackagePath="" />
   </ItemGroup>
 
 </Project>

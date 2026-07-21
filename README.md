@@ -1,4 +1,4 @@
-# HooSharper
+![HooSharper](https://raw.githubusercontent.com/openhoo/hoosharper/main/docs/assets/hoosharper-readme-header.png)
 
 [![NuGet](https://img.shields.io/nuget/v/HooSharper.Analyzers.svg)](https://www.nuget.org/packages/HooSharper.Analyzers/)
 
