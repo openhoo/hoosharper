@@ -47,14 +47,14 @@ jobs:
 
       - name: Run Commitlint
         env:
-          FROM_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-          TO_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          FROM_SHA: ${{ github.event.pull_request.base.sha }}
+          TO_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          if [ "$FROM_SHA" = "0000000000000000000000000000000000000000" ]; then
-            bunx --no-install commitlint --last --verbose
-          else
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
             bunx --no-install commitlint --from "$FROM_SHA" --to "$TO_SHA" --verbose
+          else
+            bunx --no-install commitlint --last --verbose
           fi
 
       - name: Install Hooversion
