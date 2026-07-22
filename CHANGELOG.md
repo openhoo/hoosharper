@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.6 (2026-07-22)
+
+### Other Changes
+
+- **release:** sync README package version (1da42e3)
+- SDK und CodeAnalysis Version downgrades (3bbdc92)
+- lint only pushed commit (aef2101)
+
+### Bug Fixes
+
+- **build:** release dependency compatibility (7782c06)
+
 ## 0.3.5 (2026-07-21)
 
 ### Performance
