@@ -2,6 +2,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Testing;
 using Microsoft.CodeAnalysis.Testing;
+
 using HooSharper.CodeFixes;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
     HooSharper.Analyzers.UseTryGetValueAnalyzer,
@@ -820,5 +821,72 @@ public sealed class UseTryGetValueAnalyzerTests
 
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
+    [Fact]
+    public Task ReplacesEnumAndNullableEnumDictionaryLookups()
+    {
+        const string source = """
+            using System.Collections.Generic;
 
+            enum Kind { First }
+
+            class Example
+            {
+                private readonly Dictionary<Kind, int> kinds = new();
+                private readonly Dictionary<Kind?, int> nullableKinds = new();
+                private const Kind Key = Kind.First;
+                private readonly Kind? nullableKey = Kind.First;
+
+                int Run()
+                {
+                    var result = 0;
+                    if (kinds.{|#0:ContainsKey|}(Key))
+                    {
+                        result += kinds[Key];
+                    }
+
+                    if (nullableKinds.{|#1:ContainsKey|}(nullableKey))
+                    {
+                        result += nullableKinds[nullableKey];
+                    }
+
+                    return result;
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+
+            enum Kind { First }
+
+            class Example
+            {
+                private readonly Dictionary<Kind, int> kinds = new();
+                private readonly Dictionary<Kind?, int> nullableKinds = new();
+                private const Kind Key = Kind.First;
+                private readonly Kind? nullableKey = Kind.First;
+
+                int Run()
+                {
+                    var result = 0;
+                    if (kinds.TryGetValue(Key, out var value))
+                    {
+                        result += value;
+                    }
+
+                    if (nullableKinds.TryGetValue(nullableKey, out var value1))
+                    {
+                        result += value1;
+                    }
+
+                    return result;
+                }
+            }
+            """;
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(UseTryGetValueAnalyzer.DiagnosticId).WithLocation(0),
+            VerifyCS.Diagnostic(UseTryGetValueAnalyzer.DiagnosticId).WithLocation(1),
+        };
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
 }

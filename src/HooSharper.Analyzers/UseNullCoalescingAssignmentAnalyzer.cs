@@ -46,7 +46,8 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
             {
                 Expression: AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.SimpleAssignmentExpression } assignment,
             } ||
-            HasDirective(ifStatement))
+            HasDirective(ifStatement) ||
+            HasUnpreservedComment(ifStatement.Condition))
         {
             return;
         }
@@ -221,6 +222,32 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
         foreach (var trivia in ifStatement.DescendantTrivia(descendIntoTrivia: true))
         {
             if (trivia.IsDirective)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasUnpreservedComment(SyntaxNode node)
+    {
+        foreach (var trivia in node.DescendantTrivia(descendIntoTrivia: true))
+        {
+            if (trivia.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia) ||
+                trivia.IsKind(SyntaxKind.MultiLineDocumentationCommentTrivia))
+            {
+                return true;
+            }
+
+            if (trivia.SpanStart < node.SpanStart ||
+                trivia.Span.End > node.Span.End)
+            {
+                continue;
+            }
+
+            if (trivia.IsKind(SyntaxKind.SingleLineCommentTrivia) ||
+                trivia.IsKind(SyntaxKind.MultiLineCommentTrivia))
             {
                 return true;
             }

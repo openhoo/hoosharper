@@ -440,4 +440,135 @@ public sealed class RemoveRedundantElseAnalyzerTests
 
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
+    [Fact]
+    public Task DoesNotReportDirectOrEmptyNonterminatingBranch()
+    {
+        const string source = """
+            class Example
+            {
+                void Direct(bool enabled)
+                {
+                    if (enabled)
+                        Execute();
+                    else
+                        Finish();
+                }
+
+                void Empty(bool enabled)
+                {
+                    if (enabled)
+                    {
+                    }
+                    else
+                    {
+                        Finish();
+                    }
+                }
+
+                void Execute() { }
+                void Finish() { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task RemovesElseWhenReachableStatementTerminatesBeforeUnreachableTail()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    if (enabled)
+                    {
+                        return;
+                        Execute();
+                    }
+                    {|#0:else|}
+                    {
+                        Finish();
+                    }
+                }
+
+                void Execute() { }
+                void Finish() { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    if (enabled)
+                    {
+                        return;
+                        Execute();
+                    }
+                    Finish();
+                }
+
+                void Execute() { }
+                void Finish() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(RemoveRedundantElseAnalyzer.DiagnosticId)
+            .WithLocation(0)
+            .WithMessage("Remove this redundant else");
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task PreservesScopeForDesignationInElseBody()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled, object item)
+                {
+                    if (enabled)
+                    {
+                        return;
+                    }
+                    {|#0:else|}
+                    {
+                        if (item is int value)
+                        {
+                            Use(value);
+                        }
+                    }
+                }
+
+                void Use(int value) { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool enabled, object item)
+                {
+                    if (enabled)
+                    {
+                        return;
+                    }
+                    {
+                        if (item is int value)
+                        {
+                            Use(value);
+                        }
+                    }
+                }
+
+                void Use(int value) { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(RemoveRedundantElseAnalyzer.DiagnosticId)
+            .WithLocation(0)
+            .WithMessage("Remove this redundant else");
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
 }

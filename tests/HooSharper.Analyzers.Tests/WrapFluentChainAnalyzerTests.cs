@@ -304,6 +304,13 @@ public sealed class WrapFluentChainAnalyzerTests
             "hoosharper_max_line_length = 40\nindent_style = nonsense\nindent_size = 0\ntab_width = 999999999999999999999");
     }
 
+    private static Task VerifyAnalyzerWithConfigAsync(string source, string options)
+    {
+        var test = new ConfigTest { TestCode = source };
+        test.TestState.AnalyzerConfigFiles.Add(("/.editorconfig", "root = true\n\n[*.cs]\n" + options + "\n"));
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
+
     private static Task VerifyAnalyzerWithConfigAsync(string source, DiagnosticResult expected, string options)
     {
         var test = new ConfigTest { TestCode = source, ExpectedDiagnostics = { expected } };
@@ -332,7 +339,7 @@ public sealed class WrapFluentChainAnalyzerTests
         return test.RunAsync(TestContext.Current.CancellationToken);
     }
 
-    private sealed class ConfigTest : Microsoft.CodeAnalysis.CSharp.Testing.CSharpCodeFixTest<
+    private sealed class ConfigTest: Microsoft.CodeAnalysis.CSharp.Testing.CSharpCodeFixTest<
         WrapFluentChainAnalyzer, WrapFluentChainCodeFixProvider, DefaultVerifier>
     {
         public ConfigTest() => ReferenceAssemblies = ReferenceAssemblies.Net.Net100;
@@ -385,5 +392,97 @@ public sealed class WrapFluentChainAnalyzerTests
             """;
 
         return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+    [Fact]
+    public Task ReportsWhenUnicodeChainExceedsVisualLimit()
+    {
+        const string source = """
+            class Example
+            {
+                string Run() => {|#0:"😀".Trim().PadLeft(20).PadRight(40)|};
+            }
+            """;
+
+        return VerifyAnalyzerWithConfigAsync(
+            source,
+            VerifyCS.Diagnostic(WrapFluentChainAnalyzer.DiagnosticId).WithLocation(0),
+            "hoosharper_max_line_length = 54");
+    }
+
+    [Fact]
+    public Task DoesNotCountUnicodeSurrogatePairTwice()
+    {
+        const string source = """
+            class Example
+            {
+                string Run() => "😀".Trim().PadLeft(20).PadRight(40);
+            }
+            """;
+
+        return VerifyAnalyzerWithConfigAsync(
+            source,
+            "hoosharper_max_line_length = 55");
+    }
+
+    [Fact]
+    public async Task IgnoresFieldInitializerAndParenthesizedInnerChainBoundary()
+    {
+        const string source = """
+            using System.Linq;
+            class Example
+            {
+                private readonly int[] values = new[] { 1, 2, 3 };
+                private readonly int[] field = new[] { 1, 2, 3 }.Where(value => value > 0).Select(value => value + 1).ToArray();
+
+                int[] Run() => (values.Where(value => value > 0).Select(value => value + 1))
+                    .Where(value => value < 10).ToArray();
+            }
+            """;
+
+        await VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task WrapsChainRootedAtParenthesizedInvocation()
+    {
+        const string source = """
+            using System.Linq;
+            using System.Collections.Generic;
+            class Example
+            {
+                int[] Get() => [];
+                IEnumerable<int> Run() => {|#0:(Get()).Where(value => value > 0).Select(value => value + 1)|};
+            }
+            """;
+        const string fixedSource = """
+            using System.Linq;
+            using System.Collections.Generic;
+            class Example
+            {
+                int[] Get() => [];
+                IEnumerable<int> Run() => (Get())
+                    .Where(value => value > 0)
+                    .Select(value => value + 1);
+            }
+            """;
+
+        return VerifyWithConfigAsync(
+            source,
+            fixedSource,
+            VerifyCS.Diagnostic(WrapFluentChainAnalyzer.DiagnosticId).WithLocation(0),
+            "hoosharper_max_line_length = 40");
+    }
+
+    [Fact]
+    public Task UsesTabWidthWhenIndentSizeIsTab()
+    {
+        const string source = "using System.Linq;\nclass Example\n{\n    int[] Run(int[] source) => {|#0:source.Where(x => x > 0).Select(x => x + 1).ToArray()|};\n}\n";
+        const string fixedSource = "using System.Linq;\nclass Example\n{\n    int[] Run(int[] source) => source\n       .Where(x => x > 0)\n       .Select(x => x + 1)\n       .ToArray();\n}\n";
+
+        return VerifyWithConfigAsync(
+            source,
+            fixedSource,
+            VerifyCS.Diagnostic(WrapFluentChainAnalyzer.DiagnosticId).WithLocation(0),
+            "hoosharper_max_line_length = 40\nindent_style = space\nindent_size = tab\ntab_width = 3");
     }
 }

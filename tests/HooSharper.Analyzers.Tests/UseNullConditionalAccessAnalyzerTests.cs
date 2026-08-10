@@ -431,6 +431,23 @@ public sealed class UseNullConditionalAccessAnalyzerTests
     }
 
     [Fact]
+    public Task IgnoresElementAccessBecauseItIsNotAMemberAccess()
+    {
+        const string source = """
+            class Example
+            {
+                char? GetFirst(string?[] values)
+                {
+                    var value = values[0];
+                    return value is null ? null : value[0];
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
     public Task AcceptsDefaultLanguageVersion()
     {
         const string source = """

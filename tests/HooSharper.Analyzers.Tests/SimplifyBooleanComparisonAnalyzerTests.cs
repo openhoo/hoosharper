@@ -196,4 +196,16 @@ public sealed class SimplifyBooleanComparisonAnalyzerTests
         };
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
     }
+    [Fact]
+    public Task DoesNotReportComparisonWithoutBooleanLiteral()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(bool left, bool right) => left == right;
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
 }

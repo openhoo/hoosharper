@@ -648,5 +648,107 @@ public sealed class UseDictionaryTryAddAnalyzerTests
 
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
+    [Fact]
+    public Task ReplacesEnumAndNullableEnumKeysWithDefaultComparer()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            enum Kind { First }
+
+            class C
+            {
+                void M(Kind key, Kind? nullableKey)
+                {
+                    var enums = new Dictionary<Kind, int>();
+                    var nullableEnums = new Dictionary<Kind?, int>();
+                    if (!enums.{|#0:ContainsKey|}(key)) { enums.Add(key, 1); }
+                    if (!nullableEnums.{|#1:ContainsKey|}(nullableKey)) { nullableEnums.Add(nullableKey, 2); }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+
+            enum Kind { First }
+
+            class C
+            {
+                void M(Kind key, Kind? nullableKey)
+                {
+                    var enums = new Dictionary<Kind, int>();
+                    var nullableEnums = new Dictionary<Kind?, int>();
+                    enums.TryAdd(key, 1);
+                    nullableEnums.TryAdd(nullableKey, 2);
+                }
+            }
+            """;
+
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(UseDictionaryTryAddAnalyzer.DiagnosticId).WithLocation(0),
+            VerifyCS.Diagnostic(UseDictionaryTryAddAnalyzer.DiagnosticId).WithLocation(1),
+        };
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
+    [Fact]
+    public Task IgnoresLocalReassignedToCustomComparer()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            sealed class CountingComparer : IEqualityComparer<int>
+            {
+                public int Count;
+                public bool Equals(int x, int y) { Count++; return x == y; }
+                public int GetHashCode(int value) { Count++; return value; }
+            }
+
+            class C
+            {
+                void M(int key)
+                {
+                    var dictionary = new Dictionary<int, int>();
+                    dictionary = new Dictionary<int, int>(new CountingComparer());
+                    if (!dictionary.ContainsKey(key)) { dictionary.Add(key, 1); }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task IgnoresReadonlyFieldReassignedToCustomComparerInConstructor()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            sealed class CountingComparer : IEqualityComparer<int>
+            {
+                public int Count;
+                public bool Equals(int x, int y) { Count++; return x == y; }
+                public int GetHashCode(int value) { Count++; return value; }
+            }
+
+            class C
+            {
+                private readonly Dictionary<int, int> _dictionary;
+
+                C() => _dictionary = new Dictionary<int, int>(new CountingComparer());
+
+                void M(int key)
+                {
+                    if (!_dictionary.ContainsKey(key)) { _dictionary.Add(key, 1); }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+
+
 
 }

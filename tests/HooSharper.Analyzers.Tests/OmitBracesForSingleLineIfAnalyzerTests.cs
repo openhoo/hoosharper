@@ -375,4 +375,211 @@ public sealed class OmitBracesForSingleLineIfAnalyzerTests
             source,
             VerifyCS.Diagnostic(OmitBracesForSingleLineIfAnalyzer.DiagnosticId).WithLocation(0));
     }
+    [Fact]
+    public Task KeepsBracesForEveryRecursiveDanglingElseShape()
+    {
+        const string source = """
+            using System;
+
+            class Example
+            {
+                void ForLoop(bool outer, bool inner)
+                {
+                    if (outer)
+                    {
+                        for (; inner;)
+                            if (inner)
+                                Execute();
+                    }
+                    else
+                        Finish();
+                }
+
+                void ForEach(bool outer, bool inner, bool[] values)
+                {
+                    if (outer)
+                    {
+                        foreach (var value in values)
+                            if (value)
+                                Execute();
+                    }
+                    else
+                        Finish();
+                }
+
+                void ForEachVariable(bool outer, (bool First, bool Second)[] values)
+                {
+                    if (outer)
+                    {
+                        foreach (var (first, second) in values)
+                            if (first && second)
+                                Execute();
+                    }
+                    else
+                        Finish();
+                }
+
+                void DoLoop(bool outer, bool inner)
+                {
+                    if (outer)
+                    {
+                        do
+                            if (inner)
+                                Execute();
+                        while (inner);
+                    }
+                    else
+                        Finish();
+                }
+
+                void Using(bool outer, bool inner)
+                {
+                    if (outer)
+                    {
+                        using (new Resource())
+                            if (inner)
+                                Execute();
+                    }
+                    else
+                        Finish();
+                }
+
+                void LockAndLabel(bool outer, bool inner)
+                {
+                    if (outer)
+                    {
+                        Target:
+                        lock (this)
+                            if (inner)
+                                Execute();
+                    }
+                    else
+                        Finish();
+                }
+
+                void Execute() { }
+                void Finish() { }
+
+                sealed class Resource : IDisposable
+                {
+                    public void Dispose() { }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task RemovesBracesWhenDesignationDoesNotCollide()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled, object item)
+                {
+                    if (enabled)
+                    {|#0:{|}
+                        Use(item is int value);
+                    }
+                }
+
+                void Use(bool value) { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool enabled, object item)
+                {
+                    if (enabled)
+                        Use(item is int value);
+                }
+
+                void Use(bool value) { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(OmitBracesForSingleLineIfAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task PreservesBlockCommentAfterClosingBrace()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    if (enabled)
+                    {|#0:{|}
+                        Execute();
+                    } /* after closing brace */
+                }
+
+                void Execute() { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    if (enabled)
+                        Execute();
+                    /* after closing brace */
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(OmitBracesForSingleLineIfAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task KeepsBracesAroundDirective()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    if (enabled)
+                    {
+            #if DEBUG
+                        Execute();
+            #endif
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+    [Fact]
+    public Task KeepsBracesForEmbeddedIfWhoseParentIsNotABlock()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled, object item)
+                {
+                    while (enabled)
+                        if (enabled)
+                        {
+                            Use(item is int value);
+                        }
+                }
+
+                void Use(bool value) { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
 }

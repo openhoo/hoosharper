@@ -247,4 +247,43 @@ public sealed class SimplifyBooleanReturnAnalyzerTests
 
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
+    [Fact]
+    public Task DoesNotReportNonLiteralBranchReturn()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(bool value)
+                {
+                    if (value)
+                        return value;
+                    return false;
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task DoesNotReportBlockWithAdditionalStatement()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(bool value)
+                {
+                    if (value)
+                    {
+                        System.Console.WriteLine();
+                        return true;
+                    }
+
+                    return false;
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
 }

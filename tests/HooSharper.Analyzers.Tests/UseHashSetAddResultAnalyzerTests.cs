@@ -496,5 +496,74 @@ public sealed class UseHashSetAddResultAnalyzerTests
 
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
+    [Fact]
+    public Task ReplacesEnumAndNullableEnumValues()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            enum Kind { First }
+
+            class Example
+            {
+                void Run(Kind value, Kind? nullableValue)
+                {
+                    var kinds = new HashSet<Kind>();
+                    var nullableKinds = new HashSet<Kind?>();
+                    if (!kinds.{|#0:Contains|}(value)) { kinds.Add(value); }
+                    if (!nullableKinds.{|#1:Contains|}(nullableValue)) { nullableKinds.Add(nullableValue); }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+
+            enum Kind { First }
+
+            class Example
+            {
+                void Run(Kind value, Kind? nullableValue)
+                {
+                    var kinds = new HashSet<Kind>();
+                    var nullableKinds = new HashSet<Kind?>();
+                    kinds.Add(value);
+                    nullableKinds.Add(nullableValue);
+                }
+            }
+            """;
+
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(UseHashSetAddResultAnalyzer.DiagnosticId).WithLocation(0),
+            VerifyCS.Diagnostic(UseHashSetAddResultAnalyzer.DiagnosticId).WithLocation(1),
+        };
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
+    [Fact]
+    public Task IgnoresLocalReassignedToCustomComparer()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            sealed class CountingComparer : IEqualityComparer<int>
+            {
+                public bool Equals(int x, int y) => x == y;
+                public int GetHashCode(int value) => value;
+            }
+
+            class Example
+            {
+                void Run(int value)
+                {
+                    var set = new HashSet<int>();
+                    set = new HashSet<int>(new CountingComparer());
+                    if (!set.Contains(value)) { set.Add(value); }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
 
 }

@@ -2,6 +2,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Testing;
 using Microsoft.CodeAnalysis.Testing;
+
 using HooSharper.CodeFixes;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
     HooSharper.Analyzers.UseNullCoalescingExpressionAnalyzer,
@@ -300,6 +301,25 @@ public sealed class UseNullCoalescingExpressionAnalyzerTests
             source,
             VerifyCS.Diagnostic(UseNullCoalescingExpressionAnalyzer.DiagnosticId).WithLocation(0),
             fixedSource);
+    }
+
+    [Fact]
+    public Task IgnoresSingleLineCommentOutsideFallbackBoundary()
+    {
+        const string source = """
+            class Example
+            {
+                string Get(string? value, string fallback)
+                {
+                    return value is null
+                        // preserve branch comment
+                        ? fallback
+                        : value;
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
     }
 
     [Fact]

@@ -274,4 +274,40 @@ public sealed class UseNotPatternAnalyzerTests
         };
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
     }
+    [Fact]
+    public Task DoesNotReportRedundantValueTypePattern()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(int value) => !(value is int);
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task RewritesNestedEligiblePatternAndPreservesComments()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(object value) =>
+                    {|#0:!|}((/* inner */ !(value is string) /* nested */) is false);
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                bool Run(object value) =>
+                    (/* inner */ value is not string /* nested */) is not false;
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(UseNotPatternAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
 }

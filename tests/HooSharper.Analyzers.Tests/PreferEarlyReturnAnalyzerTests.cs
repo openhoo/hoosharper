@@ -1,4 +1,6 @@
 using HooSharper.CodeFixes;
+using Microsoft.CodeAnalysis.CSharp.Testing;
+using Microsoft.CodeAnalysis.Testing;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
     HooSharper.Analyzers.PreferEarlyReturnAnalyzer,
     HooSharper.CodeFixes.PreferEarlyReturnCodeFixProvider>;
@@ -548,6 +550,167 @@ public sealed class PreferEarlyReturnAnalyzerTests
             VerifyCS.Diagnostic(PreferEarlyReturnAnalyzer.DiagnosticId).WithLocation(1),
         };
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
+    [Fact]
+    public Task ReportsDirectLabelWithoutSiblingCollision()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    {|#0:if|} (enabled)
+                    {
+                    Target:
+                        Execute();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(PreferEarlyReturnAnalyzer.DiagnosticId)
+            .WithLocation(0)
+            .WithMessage("Invert this condition and return early");
+        return VerifyCS.VerifyAnalyzerAsync(source, expected);
+    }
+
+    [Fact]
+    public Task ConvertsNestedDesignationWithoutBindingErrors()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled, object item)
+                {
+                    {|#0:if|} (enabled)
+                    {
+                        if (item is int value)
+                        {
+                            Use(value);
+                        }
+                    }
+                }
+
+                void Use(int value) { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool enabled, object item)
+                {
+                    if (!enabled)
+                        return;
+                    if (!(item is int value))
+                        return;
+                    Use(value);
+                }
+
+                void Use(int value) { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(PreferEarlyReturnAnalyzer.DiagnosticId)
+            .WithLocation(0)
+            .WithMessage("Invert this condition and return early");
+        var test = new CSharpCodeFixTest<
+            PreferEarlyReturnAnalyzer,
+            PreferEarlyReturnCodeFixProvider,
+            DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+            FixedCode = fixedSource,
+            BatchFixedCode = fixedSource,
+            NumberOfIncrementalIterations = 2,
+            NumberOfFixAllIterations = 2,
+        };
+        test.ExpectedDiagnostics.Add(expected);
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public Task DoesNotReportWhenMovedLocalCollidesWithEarlierForeachOrCatch()
+    {
+        const string source = """
+            class Example
+            {
+                void Foreach(bool enabled, int[] values)
+                {
+                    foreach (var value in values)
+                    {
+                        Use(value);
+                    }
+
+                    if (enabled)
+                    {
+                        int value = 0;
+                        Use(value);
+                    }
+                }
+
+                void Catch(bool enabled)
+                {
+                    try
+                    {
+                        Execute();
+                    }
+                    catch (System.Exception error)
+                    {
+                        Use(error);
+                    }
+
+                    if (enabled)
+                    {
+                        System.Exception error = new();
+                        Use(error);
+                    }
+                }
+
+                void Execute() { }
+                void Use(object value) { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+    [Fact]
+    public Task PreservesOpeningBraceComment()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    {|#0:if|} (enabled)
+                    { // opening body comment
+                        Execute();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    if (!enabled)
+                        return;
+                    // opening body comment
+                    Execute();
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(PreferEarlyReturnAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
     }
 
 }

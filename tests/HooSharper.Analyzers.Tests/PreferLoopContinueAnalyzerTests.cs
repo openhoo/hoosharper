@@ -655,6 +655,7 @@ public sealed class PreferLoopContinueAnalyzerTests
                 {
                     while (enabled)
                     {
+                        void Earlier()
                         {
                             Same: Execute();
                         }
@@ -672,5 +673,104 @@ public sealed class PreferLoopContinueAnalyzerTests
 
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
+    [Fact]
+    public Task ConvertsDeconstructionForeachWhenMovedLocalDoesNotCollide()
+    {
+        const string source = """
+            class Example
+            {
+                void Run((int Value, bool Enabled)[] items)
+                {
+                    foreach (var (value, enabled) in items)
+                    {
+                        {|#0:if|} (enabled)
+                        {
+                            int doubled = value * 2;
+                            Use(doubled);
+                        }
+                    }
+                }
+
+                void Use(int value) { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run((int Value, bool Enabled)[] items)
+                {
+                    foreach (var (value, enabled) in items)
+                    {
+                        if (!enabled)
+                            continue;
+                        int doubled = value * 2;
+                        Use(doubled);
+                    }
+                }
+
+                void Use(int value) { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(PreferLoopContinueAnalyzer.DiagnosticId)
+            .WithLocation(0)
+            .WithMessage("Invert this condition and continue early");
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task DoesNotReportWhenMovedLocalCollidesWithEarlierForeachOrCatch()
+    {
+        const string source = """
+            class Example
+            {
+                void Foreach(bool enabled, int[] items)
+                {
+                    while (enabled)
+                    {
+                        {
+                            foreach (var value in items)
+                            {
+                                Use(value);
+                            }
+                        }
+
+                        if (enabled)
+                        {
+                            int value = 0;
+                            Use(value);
+                        }
+                    }
+                }
+
+                void Catch(bool enabled)
+                {
+                    while (enabled)
+                    {
+                        try
+                        {
+                            Execute();
+                        }
+                        catch (System.Exception error)
+                        {
+                            Use(error);
+                        }
+
+                        if (enabled)
+                        {
+                            System.Exception error = new();
+                            Use(error);
+                        }
+                    }
+                }
+
+                void Execute() { }
+                void Use(object value) { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
 
 }

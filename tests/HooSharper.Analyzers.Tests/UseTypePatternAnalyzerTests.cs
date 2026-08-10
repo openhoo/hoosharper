@@ -109,6 +109,67 @@ public sealed class UseTypePatternAnalyzerTests
     }
 
     [Fact]
+    public Task ConvertsParenthesizedNullCheck()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(object value)
+                {
+                    var text = value {|#0:as|} string;
+                    if ((text != null))
+                    {
+                        System.Console.WriteLine(text.Length);
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(object value)
+                {
+                    if (value is string text)
+                    {
+                        System.Console.WriteLine(text.Length);
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(UseTypePatternAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
+
+    [Fact]
+    public Task DoesNotReportDynamicOrNullablePatternTypes()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(dynamic dynamicValue, object boxedValue)
+                {
+                    var dynamicText = dynamicValue as dynamic;
+                    if (dynamicText is not null)
+                    {
+                        System.Console.WriteLine(dynamicText);
+                    }
+
+                    var nullableNumber = boxedValue as int?;
+                    if (nullableNumber is not null)
+                    {
+                        System.Console.WriteLine(nullableNumber.Value);
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
     public Task DoesNotReportWhenLocalIsUsedAfterIf()
     {
         const string source = """

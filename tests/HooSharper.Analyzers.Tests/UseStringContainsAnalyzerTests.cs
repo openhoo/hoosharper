@@ -175,4 +175,70 @@ public sealed class UseStringContainsAnalyzerTests
             fixedSource);
     }
 
+    [Fact]
+    public Task DoesNotReportUserDefinedComparisonOperator()
+    {
+        const string source = """
+            struct IndexResult
+            {
+                public static bool operator >=(IndexResult value, int other) => true;
+                public static bool operator <=(IndexResult value, int other) => false;
+                public static bool operator >(IndexResult value, int other) => true;
+                public static bool operator <(IndexResult value, int other) => false;
+            }
+
+            class Custom
+            {
+                public IndexResult IndexOf(char value) => new();
+            }
+
+            class Example
+            {
+                bool Run(Custom value) => value.IndexOf('x') >= 0;
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task DoesNotReportWhenThresholdIsNotAnIntConstant()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(string value, int threshold) =>
+                    value.IndexOf('x') >= threshold;
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+    [Fact]
+    public Task FixesReversedEqualityPresenceTests()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(string value) =>
+                    -1 != value.{|#0:IndexOf|}('x') &&
+                    -1 == value.{|#1:IndexOf|}('y');
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                bool Run(string value) =>
+                    value.Contains('x') &&
+                    !value.Contains('y');
+            }
+            """;
+
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(UseStringContainsAnalyzer.DiagnosticId).WithLocation(0),
+            VerifyCS.Diagnostic(UseStringContainsAnalyzer.DiagnosticId).WithLocation(1),
+        };
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
 }

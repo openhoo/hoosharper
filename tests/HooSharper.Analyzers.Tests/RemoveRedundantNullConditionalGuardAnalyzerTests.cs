@@ -586,6 +586,30 @@ public sealed class RemoveRedundantNullConditionalGuardAnalyzerTests
     }
 
     [Fact]
+    public Task IgnoresGuardAroundConditionalElementAccess()
+    {
+        const string source = """
+            class Service
+            {
+                public Service? this[int index] => null;
+            }
+
+            class Example
+            {
+                void Invoke(Service? service)
+                {
+                    if (service is not null)
+                    {
+                        _ = service?[0];
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
     public Task AcceptsDefaultLanguageVersion()
     {
         const string source = """

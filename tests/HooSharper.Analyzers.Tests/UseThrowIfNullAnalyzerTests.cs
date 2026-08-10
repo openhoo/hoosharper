@@ -348,6 +348,61 @@ public sealed class UseThrowIfNullAnalyzerTests
     }
 
     [Fact]
+    public Task DoesNotReportWhenGuardBlockHasAdditionalStatement()
+    {
+        const string source = """
+            using System;
+
+            class Example
+            {
+                void Run(object? argument)
+                {
+                    if (argument is null)
+                    {
+                        Console.WriteLine("missing");
+                        throw new ArgumentNullException(nameof(argument));
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task ConvertsParenthesizedCheckedExpression()
+    {
+        const string source = """
+            using System;
+
+            class Example
+            {
+                void Run(object? argument)
+                {
+                    if (((argument)) {|#0:is|} null)
+                        throw new ArgumentNullException(nameof(argument));
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System;
+
+            class Example
+            {
+                void Run(object? argument)
+                {
+                    ArgumentNullException.ThrowIfNull(argument, nameof(argument));
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(UseThrowIfNullAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
+
+    [Fact]
     public Task PreservesMemberAndEscapedNameOfExpressions()
     {
         const string source = """

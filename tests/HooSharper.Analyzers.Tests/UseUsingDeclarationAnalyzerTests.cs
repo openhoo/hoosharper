@@ -715,4 +715,72 @@ public sealed class UseUsingDeclarationAnalyzerTests
 
     }
 
+    [Fact]
+    public Task DoesNotReportUsingExpressionResource()
+    {
+        const string source = """
+            using System;
+
+            class Example
+            {
+                void Run(IDisposable resource)
+                {
+                    using (resource)
+                    {
+                        resource.Dispose();
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task AcceptsExplicitCSharp8LanguageVersion()
+    {
+        const string source = """
+            using System.IO;
+
+            class Example
+            {
+                void Run()
+                {
+                    {|#0:using|} (var stream = new MemoryStream())
+                    {
+                        stream.WriteByte(1);
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.IO;
+
+            class Example
+            {
+                void Run()
+                {
+                    using var stream = new MemoryStream();
+                    stream.WriteByte(1);
+                }
+            }
+            """;
+
+        var test = new CSharpCodeFixTest<
+            UseUsingDeclarationAnalyzer,
+            UseUsingDeclarationCodeFixProvider,
+            DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+            FixedCode = fixedSource,
+        };
+        test.ExpectedDiagnostics.Add(VerifyCS.Diagnostic(UseUsingDeclarationAnalyzer.DiagnosticId).WithLocation(0));
+        test.SolutionTransforms.Add((solution, projectId) =>
+            solution.WithProjectParseOptions(
+                projectId,
+                ((CSharpParseOptions)solution.GetProject(projectId)!.ParseOptions!)
+                    .WithLanguageVersion(LanguageVersion.CSharp8)));
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
 }

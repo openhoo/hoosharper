@@ -521,4 +521,133 @@ public sealed class MergeNestedIfAnalyzerTests
 
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
+    [Fact]
+    public Task MergesNestedIfUsedAsEmbeddedStatement()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool repeat, bool enabled, bool ready)
+                {
+                    while (repeat)
+                        {|#0:if|} (enabled)
+                        {
+                            if (ready)
+                            {
+                                Execute();
+                            }
+                        }
+                }
+
+                void Execute() { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool repeat, bool enabled, bool ready)
+                {
+                    while (repeat)
+                        if (enabled && ready)
+                        {
+                            Execute();
+                        }
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(MergeNestedIfAnalyzer.DiagnosticId)
+            .WithLocation(0)
+            .WithMessage("Merge these nested if statements");
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task MergesDesignationWhenNoSiblingDeclarationCollides()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled, object item)
+                {
+                    {|#0:if|} (enabled)
+                    {
+                        if (item is int value)
+                        {
+                            Use(value);
+                        }
+                    }
+                }
+
+                void Use(int value) { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool enabled, object item)
+                {
+                    if (enabled && item is int value)
+                    {
+                        Use(value);
+                    }
+                }
+
+                void Use(int value) { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(MergeNestedIfAnalyzer.DiagnosticId)
+            .WithLocation(0)
+            .WithMessage("Merge these nested if statements");
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task DoesNotReportWhenDesignationWouldCollideWithForeachOrLocalFunction()
+    {
+        const string source = """
+            class Example
+            {
+                void Foreach(bool enabled, object item, int[] values)
+                {
+                    foreach (var value in values)
+                    {
+                        Use(value);
+                    }
+
+                    if (enabled)
+                    {
+                        if (item is int value)
+                        {
+                            Use(value);
+                        }
+                    }
+                }
+
+                void LocalFunction(bool enabled, object item)
+                {
+                    {
+                        void value() { }
+                        value();
+                    }
+
+                    if (enabled)
+                    {
+                        if (item is System.Action value)
+                        {
+                            value();
+                        }
+                    }
+                }
+
+                void Use(int value) { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
 }

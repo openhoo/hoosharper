@@ -1,9 +1,8 @@
+using HooSharper.CodeFixes;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Testing;
 using Microsoft.CodeAnalysis.Testing;
-
-using HooSharper.CodeFixes;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
     HooSharper.Analyzers.UseNullCoalescingAssignmentAnalyzer,
     HooSharper.CodeFixes.UseNullCoalescingAssignmentCodeFixProvider>;
@@ -510,4 +509,120 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
 
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
+    [Fact]
+    public Task IgnoresCommentInsideNullCondition()
+    {
+        const string source = """
+            class Example
+            {
+                void Set(string? value, string fallback)
+                {
+                    if (value /* keep */ is null)
+                    {
+                        value = fallback;
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task IgnoresBoundaryDocumentationCommentThatFixerCannotPreserve()
+    {
+        const string source = """
+            class Example
+            {
+                void Set(string? value, string fallback)
+                {
+                    if (/** keep */ value is null)
+                    {
+                        value = fallback;
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task PreservesCommentsAtConditionBoundaries()
+    {
+        const string source = """
+            class Example
+            {
+                void Set(string? value, string fallback)
+                {
+                    if (/* before */ value {|#0:is|} null /* after */)
+                    {
+                        value = fallback;
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Set(string? value, string fallback)
+                {
+                    /* before */
+                    /* after */
+                    value ??= fallback;
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
+
+    [Fact]
+    public Task ReplacesFieldOnStableReadonlyReceiver()
+    {
+        const string source = """
+            class Holder
+            {
+                public string? Value;
+            }
+
+            class Example
+            {
+                private readonly Holder holder = new();
+
+                void Set(string fallback)
+                {
+                    if (((holder.Value)) {|#0:is|} null)
+                    {
+                        ((holder.Value)) = fallback;
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Holder
+            {
+                public string? Value;
+            }
+
+            class Example
+            {
+                private readonly Holder holder = new();
+
+                void Set(string fallback)
+                {
+                    ((holder.Value)) ??= fallback;
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
+
 }
