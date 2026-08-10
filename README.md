@@ -22,7 +22,7 @@ The analyzer package targets `netstandard2.0` so it can run in a broad range of 
 Install the package directly from [nuget.org](https://www.nuget.org/packages/HooSharper.Analyzers):
 
 ```bash
-dotnet add package HooSharper.Analyzers --version 0.3.6
+dotnet add package HooSharper.Analyzers --version 0.3.7
 ```
 
 For central package management, add the version to `Directory.Packages.props`:
@@ -30,7 +30,7 @@ For central package management, add the version to `Directory.Packages.props`:
 ```xml
 <Project>
   <ItemGroup>
-    <PackageVersion Include="HooSharper.Analyzers" Version="0.3.6" />
+    <PackageVersion Include="HooSharper.Analyzers" Version="0.3.7" />
   </ItemGroup>
 </Project>
 ```
@@ -48,7 +48,7 @@ Without central package management:
 ```xml
 <ItemGroup>
   <PackageReference Include="HooSharper.Analyzers"
-                    Version="0.3.6"
+                    Version="0.3.7"
                     PrivateAssets="all" />
 </ItemGroup>
 ```
@@ -74,7 +74,7 @@ dotnet nuget add source /absolute/path/to/hoosharper/artifacts \
   --name HooSharperLocal
 
 dotnet add package HooSharper.Analyzers \
-  --version 0.3.6 \
+  --version 0.3.7 \
   --source /absolute/path/to/hoosharper/artifacts
 ```
 

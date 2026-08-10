@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.7 (2026-08-10)
+
+### Bug Fixes
+
+- **analyzers:** harden rewrite semantics (4b9745b)
+- **analyzers:** preserve condition comments (2a5e7fd)
+
 ## 0.3.6 (2026-07-22)
 
 ### Other Changes
