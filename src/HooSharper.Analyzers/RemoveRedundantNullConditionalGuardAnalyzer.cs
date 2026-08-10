@@ -33,6 +33,13 @@ public sealed class RemoveRedundantNullConditionalGuardAnalyzer : DiagnosticAnal
 
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
     {
+        if (context.Node.SyntaxTree.Options is not CSharpParseOptions parseOptions ||
+            (parseOptions.LanguageVersion != LanguageVersion.Default &&
+             parseOptions.LanguageVersion < LanguageVersion.CSharp6))
+        {
+            return;
+        }
+
         var ifStatement = (IfStatementSyntax)context.Node;
         if (ifStatement.Else is not null ||
             ifStatement.Statement is not BlockSyntax { Statements.Count: 1 } block ||
@@ -41,6 +48,7 @@ public sealed class RemoveRedundantNullConditionalGuardAnalyzer : DiagnosticAnal
                 Expression: ConditionalAccessExpressionSyntax conditionalAccess,
             } ||
             HasDirective(ifStatement) ||
+            HasComment(ifStatement.Condition) ||
             !TryGetNonNullCheckedReceiver(ifStatement.Condition, context, out var checkedReceiver, out var location) ||
             !TryGetStableReceiverOperation(checkedReceiver, context.SemanticModel, context.CancellationToken,
                 out var checkedOperation) ||
@@ -142,8 +150,9 @@ public sealed class RemoveRedundantNullConditionalGuardAnalyzer : DiagnosticAnal
             IParameterReferenceOperation => true,
             IInstanceReferenceOperation => true,
             IFieldReferenceOperation field =>
-                field.Field.IsReadOnly && (field.Instance is null || IsStableOperation(field.Instance)),
-            IEventReferenceOperation => false,
+                field.Field.IsReadOnly &&
+                !field.Field.IsVolatile &&
+                (field.Instance is null || IsStableOperation(field.Instance)),
             _ => false,
         };
     }
@@ -204,4 +213,9 @@ public sealed class RemoveRedundantNullConditionalGuardAnalyzer : DiagnosticAnal
 
     private static bool HasDirective(IfStatementSyntax ifStatement) =>
         ifStatement.DescendantTrivia(descendIntoTrivia: true).Any(static trivia => trivia.IsDirective);
+
+    private static bool HasComment(SyntaxNode node) =>
+        node.DescendantTrivia(descendIntoTrivia: true).Any(static trivia =>
+            trivia.IsKind(SyntaxKind.SingleLineCommentTrivia) ||
+            trivia.IsKind(SyntaxKind.MultiLineCommentTrivia));
 }

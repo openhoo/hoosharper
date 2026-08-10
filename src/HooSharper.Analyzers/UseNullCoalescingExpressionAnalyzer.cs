@@ -32,6 +32,13 @@ public sealed class UseNullCoalescingExpressionAnalyzer : DiagnosticAnalyzer
 
     private static void AnalyzeConditionalExpression(SyntaxNodeAnalysisContext context)
     {
+        if (context.Node.SyntaxTree.Options is not CSharpParseOptions parseOptions ||
+            (parseOptions.LanguageVersion != LanguageVersion.Default &&
+             parseOptions.LanguageVersion < LanguageVersion.CSharp2))
+        {
+            return;
+        }
+
         var conditional = (ConditionalExpressionSyntax)context.Node;
         if (conditional.ContainsDirectives ||
             !TryGetNullCheck(
@@ -50,7 +57,8 @@ public sealed class UseNullCoalescingExpressionAnalyzer : DiagnosticAnalyzer
         var repeatedOperation = context.SemanticModel.GetOperation(repeatedTarget, context.CancellationToken);
         if (!IsStableSupportedTarget(checkedOperation) ||
             repeatedOperation is null ||
-            !AreEquivalentReferences(checkedOperation!, repeatedOperation))
+            !AreEquivalentReferences(checkedOperation!, repeatedOperation) ||
+            HasUnpreservableSingleLineComment(conditional, checkedTarget, fallback))
         {
             return;
         }
@@ -213,12 +221,31 @@ public sealed class UseNullCoalescingExpressionAnalyzer : DiagnosticAnalyzer
         }
     }
 
+    private static bool HasUnpreservableSingleLineComment(
+        ConditionalExpressionSyntax conditional,
+        ExpressionSyntax target,
+        ExpressionSyntax fallback)
+    {
+        foreach (var trivia in conditional.DescendantTrivia(descendIntoTrivia: true))
+        {
+            if (trivia.IsKind(SyntaxKind.SingleLineCommentTrivia) &&
+                !target.Span.Contains(trivia.Span) &&
+                !fallback.Span.Contains(trivia.Span))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool SupportsNullCoalescing(ITypeSymbol type) =>
         type.IsReferenceType ||
         type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T };
 
     private static bool SameType(ITypeSymbol? first, ITypeSymbol? second) =>
         SymbolEqualityComparer.IncludeNullability.Equals(first, second);
+
 
     private static ExpressionSyntax WalkDownParentheses(ExpressionSyntax expression)
     {

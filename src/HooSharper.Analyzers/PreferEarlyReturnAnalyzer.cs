@@ -35,7 +35,10 @@ public sealed class PreferEarlyReturnAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
-        if (ifStatement.Else is not null || ifStatement.Statement is not BlockSyntax block || block.Statements.Count == 0)
+        if (ifStatement.Else is not null ||
+            ifStatement.Statement is not BlockSyntax block ||
+            block.Statements.Count == 0 ||
+            ifStatement.ContainsDirectives)
         {
             return;
         }

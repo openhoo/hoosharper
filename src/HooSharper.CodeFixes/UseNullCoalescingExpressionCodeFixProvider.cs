@@ -67,10 +67,9 @@ public sealed class UseNullCoalescingExpressionCodeFixProvider : CodeFixProvider
 
             operatorToken = operatorToken.WithTrailingTrivia(trailing);
         }
-
         var replacement = SyntaxFactory.BinaryExpression(
                 SyntaxKind.CoalesceExpression,
-                target.WithoutLeadingTrivia(),
+                target,
                 operatorToken,
                 PrepareFallback(fallback))
             .WithLeadingTrivia(conditional.GetLeadingTrivia())
@@ -82,11 +81,14 @@ public sealed class UseNullCoalescingExpressionCodeFixProvider : CodeFixProvider
 
     private static ExpressionSyntax PrepareFallback(ExpressionSyntax fallback)
     {
-        var operand = fallback.WithoutTrivia();
+        var operand = WithoutOuterTrivia(fallback);
         return NeedsParentheses(operand)
             ? SyntaxFactory.ParenthesizedExpression(operand)
             : operand;
     }
+
+    private static ExpressionSyntax WithoutOuterTrivia(ExpressionSyntax expression) =>
+        expression.WithLeadingTrivia(default(SyntaxTriviaList)).WithTrailingTrivia(default(SyntaxTriviaList));
 
     private static bool NeedsParentheses(ExpressionSyntax expression) =>
         expression is AssignmentExpressionSyntax or

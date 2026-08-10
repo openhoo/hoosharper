@@ -135,20 +135,39 @@ public sealed class UseStringContainsAnalyzer : DiagnosticAnalyzer
 
     private static bool HasMatchingContainsOverload(IMethodSymbol indexOfMethod)
     {
+        var parameters = indexOfMethod.Parameters;
+        if (parameters.Length == 1 &&
+            parameters[0].Type.SpecialType != SpecialType.System_Char)
+        {
+            return false;
+        }
+
+        if (parameters.Length == 2 &&
+            (parameters[0].Type.SpecialType != SpecialType.System_String ||
+             parameters[1].Type.ToDisplayString() != "System.StringComparison"))
+        {
+            return false;
+        }
+
+        if (parameters.Length is not 1 and not 2)
+        {
+            return false;
+        }
+
         foreach (var member in indexOfMethod.ContainingType.GetMembers("Contains"))
         {
             if (member is not IMethodSymbol { IsStatic: false } containsMethod ||
-                containsMethod.Parameters.Length != indexOfMethod.Parameters.Length)
+                containsMethod.Parameters.Length != parameters.Length)
             {
                 continue;
             }
 
             var matches = true;
-            for (var index = 0; index < indexOfMethod.Parameters.Length; index++)
+            for (var index = 0; index < parameters.Length; index++)
             {
-                if (indexOfMethod.Parameters[index].RefKind != containsMethod.Parameters[index].RefKind ||
+                if (parameters[index].RefKind != containsMethod.Parameters[index].RefKind ||
                     !SymbolEqualityComparer.Default.Equals(
-                        indexOfMethod.Parameters[index].Type,
+                        parameters[index].Type,
                         containsMethod.Parameters[index].Type))
                 {
                     matches = false;

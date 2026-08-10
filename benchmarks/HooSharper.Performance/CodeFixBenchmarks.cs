@@ -279,7 +279,20 @@ public class CodeFixFixAllBenchmarks
     }
 
     [IterationCleanup(Target = nameof(DocumentFixAll))]
-    public void CleanupDocumentFixAll() => DisposeState();
+    public void CleanupDocumentFixAll()
+    {
+        try
+        {
+            if (_state is not null)
+            {
+                FixerBenchmarkFixture.ValidateFixAllResultAsync(_state).GetAwaiter().GetResult();
+            }
+        }
+        finally
+        {
+            DisposeState();
+        }
+    }
 
     [GlobalCleanup]
     public void Cleanup() => DisposeState();
@@ -302,42 +315,50 @@ internal static class FixerBenchmarkFixture
             BenchmarkSource.CreateTryGetValueSource(groups),
             new UseTryGetValueAnalyzer(),
             new UseTryGetValueCodeFixProvider(),
-            UseTryGetValueAnalyzer.DiagnosticId),
+            UseTryGetValueAnalyzer.DiagnosticId,
+            groups),
         FixerScenario.UseUsingDeclaration => new(
             BenchmarkSource.CreateUsingDeclarationSource(groups),
             new UseUsingDeclarationAnalyzer(),
             new UseUsingDeclarationCodeFixProvider(),
-            UseUsingDeclarationAnalyzer.DiagnosticId),
+            UseUsingDeclarationAnalyzer.DiagnosticId,
+            groups),
         FixerScenario.WrapFluentChain => new(
             BenchmarkSource.CreateWrapFluentChainSource(groups),
             new WrapFluentChainAnalyzer(),
             new WrapFluentChainCodeFixProvider(),
-            WrapFluentChainAnalyzer.DiagnosticId),
+            WrapFluentChainAnalyzer.DiagnosticId,
+            groups),
         FixerScenario.PreferEarlyReturn => new(
             BenchmarkSource.CreatePreferEarlyReturnSource(groups),
             new PreferEarlyReturnAnalyzer(),
             new PreferEarlyReturnCodeFixProvider(),
-            PreferEarlyReturnAnalyzer.DiagnosticId),
+            PreferEarlyReturnAnalyzer.DiagnosticId,
+            groups),
         FixerScenario.PreferLoopContinue => new(
             BenchmarkSource.CreatePreferLoopContinueSource(groups),
             new PreferLoopContinueAnalyzer(),
             new PreferLoopContinueCodeFixProvider(),
-            PreferLoopContinueAnalyzer.DiagnosticId),
+            PreferLoopContinueAnalyzer.DiagnosticId,
+            groups),
         FixerScenario.MergeNestedIf => new(
             BenchmarkSource.CreateMergeNestedIfSource(groups),
             new MergeNestedIfAnalyzer(),
             new MergeNestedIfCodeFixProvider(),
-            MergeNestedIfAnalyzer.DiagnosticId),
+            MergeNestedIfAnalyzer.DiagnosticId,
+            groups),
         FixerScenario.UseNullConditionalAccess => new(
             BenchmarkSource.CreateNullConditionalAccessSource(groups),
             new UseNullConditionalAccessAnalyzer(),
             new UseNullConditionalAccessCodeFixProvider(),
-            UseNullConditionalAccessAnalyzer.DiagnosticId),
+            UseNullConditionalAccessAnalyzer.DiagnosticId,
+            groups),
         FixerScenario.UseNullCoalescingAssignment => new(
             BenchmarkSource.CreateNullCoalescingAssignmentSource(groups),
             new UseNullCoalescingAssignmentAnalyzer(),
             new UseNullCoalescingAssignmentCodeFixProvider(),
-            UseNullCoalescingAssignmentAnalyzer.DiagnosticId),
+            UseNullCoalescingAssignmentAnalyzer.DiagnosticId,
+            groups),
         _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null),
     };
 
@@ -368,16 +389,30 @@ internal static class FixerBenchmarkFixture
                         logAnalyzerExecutionTime: false,
                         reportSuppressedDiagnostics: false))
                 .GetAnalyzerDiagnosticsAsync().ConfigureAwait(false);
+            if (analyzerDiagnostics.Any(static diagnostic => diagnostic.Id == "AD0001"))
+            {
+                throw new InvalidOperationException("Generated fixture produced AD0001 analyzer failure.");
+            }
+
+            var unexpectedDiagnostics = analyzerDiagnostics
+                .Where(diagnostic => diagnostic.Id != fixture.DiagnosticId)
+                .ToImmutableArray();
+            if (!unexpectedDiagnostics.IsEmpty)
+            {
+                throw new InvalidOperationException(
+                    $"Generated fixture produced unexpected diagnostic {unexpectedDiagnostics[0]}.");
+            }
+
             var diagnostics = analyzerDiagnostics
                 .Where(diagnostic => diagnostic.Id == fixture.DiagnosticId)
                 .ToImmutableArray();
-            if (diagnostics.IsEmpty)
+            if (diagnostics.Length != fixture.ExpectedDiagnosticCount)
             {
                 throw new InvalidOperationException(
-                    $"Generated fixture did not produce {fixture.DiagnosticId}.");
+                    $"Expected {fixture.ExpectedDiagnosticCount} {fixture.DiagnosticId} diagnostics, but found {diagnostics.Length}.");
             }
 
-            return new PreparedFixture(workspace, document, diagnostics, fixture.Source);
+            return new PreparedFixture(workspace, document, diagnostics, fixture.Source, fixture.Analyzer);
         }
         catch
         {
@@ -490,6 +525,43 @@ internal static class FixerBenchmarkFixture
 
         return new ApplicationResult(operationCount, changedText.Length, ComputeChecksum(changedText));
     }
+    public static async Task ValidateFixAllResultAsync(FixAllState state)
+    {
+        var changedDocument = state.ActionState.Fixture.Workspace.CurrentSolution.GetDocument(
+                state.ActionState.Fixture.Document.Id)
+            ?? throw new InvalidOperationException("The changed document is missing from the workspace.");
+        var compilation = await changedDocument.Project.GetCompilationAsync().ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The changed project compilation is missing.");
+        var diagnostics = await compilation.WithAnalyzers(
+                [state.ActionState.Fixture.Analyzer],
+                new CompilationWithAnalyzersOptions(
+                    changedDocument.Project.AnalyzerOptions,
+                    null,
+                    concurrentAnalysis: true,
+                    logAnalyzerExecutionTime: false,
+                    reportSuppressedDiagnostics: false))
+            .GetAnalyzerDiagnosticsAsync()
+            .ConfigureAwait(false);
+        if (diagnostics.Any(static diagnostic => diagnostic.Id == "AD0001"))
+        {
+            throw new InvalidOperationException("Fix All result produced AD0001 analyzer failure.");
+        }
+
+        var targetId = state.ActionState.Fixture.Diagnostics[0].Id;
+        var unexpected = diagnostics.FirstOrDefault(diagnostic => diagnostic.Id != targetId);
+        if (unexpected is not null)
+        {
+            throw new InvalidOperationException($"Fix All result produced unexpected diagnostic {unexpected}.");
+        }
+
+        var remaining = diagnostics.Count(diagnostic => diagnostic.Id == targetId);
+        if (remaining != 0)
+        {
+            throw new InvalidOperationException(
+                $"Fix All left {remaining} {targetId} diagnostics after application.");
+        }
+    }
+
 
     private static async Task<List<CodeAction>> RegisterActionsAsync(
         PreparedFixture fixture,
@@ -543,19 +615,21 @@ internal sealed record FixFixture(
     string Source,
     DiagnosticAnalyzer Analyzer,
     CodeFixProvider Provider,
-    string DiagnosticId);
-
+    string DiagnosticId,
+    int ExpectedDiagnosticCount);
 internal sealed class PreparedFixture(
     AdhocWorkspace workspace,
     Document document,
     ImmutableArray<Diagnostic> diagnostics,
-    string originalSource) : IDisposable
+    string originalSource,
+    DiagnosticAnalyzer analyzer) : IDisposable
 {
     public AdhocWorkspace Workspace { get; } = workspace;
 
     public Document Document { get; } = document;
 
     public ImmutableArray<Diagnostic> Diagnostics { get; } = diagnostics;
+    public DiagnosticAnalyzer Analyzer { get; } = analyzer;
 
     public string OriginalSource { get; } = originalSource;
 

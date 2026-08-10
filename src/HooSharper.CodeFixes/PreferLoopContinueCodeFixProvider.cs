@@ -61,7 +61,10 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
             return document;
         }
 
-        var negatedCondition = Negate(ifStatement.Condition.WithoutTrivia())
+        var negatedCondition = Negate(
+                ifStatement.Condition,
+                semanticModel,
+                cancellationToken)
             .WithTriviaFrom(ifStatement.Condition);
         var guard = SyntaxFactory.IfStatement(
                 negatedCondition,
@@ -94,18 +97,33 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
         BlockSyntax body)
     {
         var introducedNames = CollectDeclaredNames(body);
-        if (introducedNames.Count == 0)
+        var introducedLabels = CollectDeclaredLabels(body);
+        if (introducedNames.Count == 0 && introducedLabels.Count == 0)
         {
             return false;
         }
 
         var ifIndex = parentBlock.Statements.IndexOf(ifStatement);
-        for (var index = 0; index < ifIndex; index++)
+        for (var index = 0; index < parentBlock.Statements.Count; index++)
         {
+            if (index == ifIndex)
+            {
+                continue;
+            }
+
             foreach (var node in parentBlock.Statements[index].DescendantNodes())
             {
-                var name = GetDeclaredName(node);
-                if (name is not null && introducedNames.Contains(name))
+                if (index < ifIndex)
+                {
+                    var name = GetDeclaredName(node);
+                    if (name is not null && introducedNames.Contains(name))
+                    {
+                        return true;
+                    }
+                }
+
+                if (node is LabeledStatementSyntax label &&
+                    introducedLabels.Contains(label.Identifier.ValueText))
                 {
                     return true;
                 }
@@ -114,6 +132,7 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
 
         return false;
     }
+
 
     private static HashSet<string> CollectDeclaredNames(SyntaxNode scope)
     {
@@ -128,6 +147,20 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
         }
 
         return names;
+    }
+
+    private static HashSet<string> CollectDeclaredLabels(SyntaxNode scope)
+    {
+        var labels = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (var node in scope.DescendantNodes())
+        {
+            if (node is LabeledStatementSyntax label)
+            {
+                labels.Add(label.Identifier.ValueText);
+            }
+        }
+
+        return labels;
     }
 
     private static string? GetDeclaredName(SyntaxNode node) => node switch
@@ -170,25 +203,48 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
         }
     }
 
-    private static bool HasSignificantTrivia(SyntaxTriviaList trivia) =>
+    private static bool HasSignificantTrivia(IEnumerable<SyntaxTrivia> trivia) =>
         trivia.Any(item => !item.IsKind(SyntaxKind.WhitespaceTrivia) && !item.IsKind(SyntaxKind.EndOfLineTrivia));
 
-    private static ExpressionSyntax Negate(ExpressionSyntax condition)
+    private static ExpressionSyntax Negate(
+        ExpressionSyntax condition,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken)
     {
+        var originalCondition = condition;
         condition = WalkDownParentheses(condition);
         return condition switch
         {
-            PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression } logicalNot =>
+            PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression } logicalNot
+                when condition == originalCondition &&
+                    IsBuiltInLogicalNot(logicalNot, semanticModel, cancellationToken) &&
+                    !HasSignificantTrivia(logicalNot.DescendantTrivia(descendIntoTrivia: true)) =>
                 WalkDownParentheses(logicalNot.Operand).WithoutTrivia(),
-            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.EqualsExpression) =>
-                ReplaceOperator(binary, SyntaxKind.NotEqualsExpression, SyntaxKind.ExclamationEqualsToken),
-            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.NotEqualsExpression) =>
-                ReplaceOperator(binary, SyntaxKind.EqualsExpression, SyntaxKind.EqualsEqualsToken),
+            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.EqualsExpression) &&
+                IsBuiltInEquality(binary, semanticModel, cancellationToken) =>
+                ReplaceOperator(binary.WithoutTrivia(), SyntaxKind.NotEqualsExpression, SyntaxKind.ExclamationEqualsToken),
+            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.NotEqualsExpression) &&
+                IsBuiltInEquality(binary, semanticModel, cancellationToken) =>
+                ReplaceOperator(binary.WithoutTrivia(), SyntaxKind.EqualsExpression, SyntaxKind.EqualsEqualsToken),
             IdentifierNameSyntax or MemberAccessExpressionSyntax or InvocationExpressionSyntax =>
-                SyntaxFactory.PrefixUnaryExpression(SyntaxKind.LogicalNotExpression, condition),
-            _ => ParenthesizedNegation(condition),
+                SyntaxFactory.PrefixUnaryExpression(SyntaxKind.LogicalNotExpression, condition.WithoutTrivia()),
+            _ => ParenthesizedNegation(originalCondition),
         };
     }
+
+    private static bool IsBuiltInLogicalNot(
+        PrefixUnaryExpressionSyntax expression,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken) =>
+        semanticModel.GetOperation(expression, cancellationToken) is
+            Microsoft.CodeAnalysis.Operations.IUnaryOperation { OperatorMethod: null };
+
+    private static bool IsBuiltInEquality(
+        BinaryExpressionSyntax expression,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken) =>
+        semanticModel.GetOperation(expression, cancellationToken) is
+            Microsoft.CodeAnalysis.Operations.IBinaryOperation { OperatorMethod: null };
 
     private static BinaryExpressionSyntax ReplaceOperator(
         BinaryExpressionSyntax expression,

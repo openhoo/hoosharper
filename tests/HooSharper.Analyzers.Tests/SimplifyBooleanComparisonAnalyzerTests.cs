@@ -155,4 +155,45 @@ public sealed class SimplifyBooleanComparisonAnalyzerTests
         };
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
     }
+    [Fact]
+    public Task DoesNotRewriteUserDefinedLogicalNot()
+    {
+        const string source = """
+            struct Flag
+            {
+                public static bool operator !(Flag value) => false;
+                public static implicit operator bool(Flag value) => true;
+            }
+
+            class Example
+            {
+                bool Run(Flag value) => (!value) == false;
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task FixAllSimplifiesNestedComparisons()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(bool value) => ((value == true) {|#0:==|} false);
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                bool Run(bool value) => (!value);
+            }
+            """;
+
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(SimplifyBooleanComparisonAnalyzer.DiagnosticId).WithLocation(0),
+        };
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
 }

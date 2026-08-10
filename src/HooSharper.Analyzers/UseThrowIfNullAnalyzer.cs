@@ -45,7 +45,16 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
     private static bool HasThrowIfNull(INamedTypeSymbol exceptionType) =>
         exceptionType.GetMembers("ThrowIfNull")
             .OfType<IMethodSymbol>()
-            .Any(static method => method.IsStatic && method.DeclaredAccessibility == Accessibility.Public);
+            .Any(static method =>
+                method.IsStatic &&
+                method.DeclaredAccessibility == Accessibility.Public &&
+                method.ReturnsVoid &&
+                method.Arity == 0 &&
+                method.Parameters.Length == 2 &&
+                method.Parameters[0].RefKind == RefKind.None &&
+                method.Parameters[0].Type.SpecialType == SpecialType.System_Object &&
+                method.Parameters[1].RefKind == RefKind.None &&
+                method.Parameters[1].Type.SpecialType == SpecialType.System_String);
 
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context, INamedTypeSymbol exceptionType)
     {
@@ -100,7 +109,7 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
         {
             checkedExpression = WalkDownParentheses(expression);
             location = isKeyword.GetLocation();
-            return true;
+            return !IsPointer(checkedExpression, context);
         }
 
         if (condition is BinaryExpressionSyntax
@@ -118,14 +127,14 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
             {
                 checkedExpression = WalkDownParentheses(equality.Right);
                 location = operatorToken.GetLocation();
-                return true;
+                return !IsPointer(checkedExpression, context);
             }
 
             if (equality.Right.IsKind(SyntaxKind.NullLiteralExpression))
             {
                 checkedExpression = WalkDownParentheses(equality.Left);
                 location = operatorToken.GetLocation();
-                return true;
+                return !IsPointer(checkedExpression, context);
             }
         }
 
@@ -133,6 +142,9 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
         location = null!;
         return false;
     }
+    private static bool IsPointer(ExpressionSyntax expression, SyntaxNodeAnalysisContext context) =>
+        context.SemanticModel.GetTypeInfo(expression, context.CancellationToken).Type?.TypeKind == TypeKind.Pointer;
+
 
     private static bool IsMatchingNameOf(
         ExpressionSyntax expression,

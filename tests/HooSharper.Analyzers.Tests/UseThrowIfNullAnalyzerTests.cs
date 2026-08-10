@@ -34,7 +34,7 @@ public sealed class UseThrowIfNullAnalyzerTests
             {
                 void Run(object argument)
                 {
-                    ArgumentNullException.ThrowIfNull(argument);
+                    ArgumentNullException.ThrowIfNull(argument, nameof(argument));
                 }
             }
             """;
@@ -67,7 +67,7 @@ public sealed class UseThrowIfNullAnalyzerTests
             {
                 void Run(object argument)
                 {
-                    ArgumentNullException.ThrowIfNull(argument);
+                    ArgumentNullException.ThrowIfNull(argument, nameof(argument));
                 }
             }
             """;
@@ -94,7 +94,7 @@ public sealed class UseThrowIfNullAnalyzerTests
             {
                 void Run(object argument)
                 {
-                    System.ArgumentNullException.ThrowIfNull(argument);
+                    System.ArgumentNullException.ThrowIfNull(argument, nameof(argument));
                 }
             }
             """;
@@ -131,7 +131,7 @@ public sealed class UseThrowIfNullAnalyzerTests
                 {
                     // Validate public input.
                     // Keep the parameter name stable.
-                    ArgumentNullException.ThrowIfNull(argument);
+                    ArgumentNullException.ThrowIfNull(argument, nameof(argument));
                 }
             }
             """;
@@ -167,9 +167,9 @@ public sealed class UseThrowIfNullAnalyzerTests
             {
                 void Run(object first, string second)
                 {
-                    ArgumentNullException.ThrowIfNull(first);
+                    ArgumentNullException.ThrowIfNull(first, nameof(first));
 
-                    ArgumentNullException.ThrowIfNull(second);
+                    ArgumentNullException.ThrowIfNull(second, nameof(second));
                 }
             }
             """;
@@ -345,5 +345,55 @@ public sealed class UseThrowIfNullAnalyzerTests
             """;
 
         return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task PreservesMemberAndEscapedNameOfExpressions()
+    {
+        const string source = """
+            using System;
+
+            class Example
+            {
+                void Run(Holder holder, object @class)
+                {
+                    if (holder.Value {|#0:is|} null)
+                        throw new ArgumentNullException(nameof(holder.Value)); // trailing
+
+                    if (@class {|#1:is|} null)
+                        throw new ArgumentNullException(nameof(@class));
+                }
+            }
+
+            class Holder
+            {
+                public object? Value { get; set; }
+            }
+            """;
+        const string fixedSource = """
+            using System;
+
+            class Example
+            {
+                void Run(Holder holder, object @class)
+                {
+                    ArgumentNullException.ThrowIfNull(holder.Value, nameof(holder.Value)); // trailing
+
+                    ArgumentNullException.ThrowIfNull(@class, nameof(@class));
+                }
+            }
+
+            class Holder
+            {
+                public object? Value { get; set; }
+            }
+            """;
+
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(UseThrowIfNullAnalyzer.DiagnosticId).WithLocation(0),
+            VerifyCS.Diagnostic(UseThrowIfNullAnalyzer.DiagnosticId).WithLocation(1),
+        };
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
     }
 }

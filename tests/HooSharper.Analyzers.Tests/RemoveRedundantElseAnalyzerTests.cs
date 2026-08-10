@@ -418,4 +418,26 @@ public sealed class RemoveRedundantElseAnalyzerTests
 
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
     }
+
+    [Fact]
+    public Task DoesNotReportDirectiveOnlyElse()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    if (enabled)
+                        return;
+                    else
+                    {
+            #if DEBUG
+            #endif
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
 }

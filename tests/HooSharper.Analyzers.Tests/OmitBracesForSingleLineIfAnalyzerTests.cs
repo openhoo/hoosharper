@@ -292,4 +292,87 @@ public sealed class OmitBracesForSingleLineIfAnalyzerTests
 
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
+
+    [Fact]
+    public Task KeepsBracesForLabeledStatement()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    if (enabled)
+                    {
+                        Label: Execute();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task KeepsBracesWhenWhileWrappedIfCouldCaptureElse()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool outer, bool inner)
+                {
+                    if (outer)
+                    {
+                        while (inner)
+                            if (inner)
+                                Execute();
+                    }
+                    else
+                    {|#0:{|}
+                        Finish();
+                    }
+                }
+
+                void Execute() { }
+                void Finish() { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(
+            source,
+            VerifyCS.Diagnostic(OmitBracesForSingleLineIfAnalyzer.DiagnosticId).WithLocation(0));
+    }
+
+
+    [Fact]
+    public Task KeepsBracesWhenElseIfWrapperCouldCaptureElse()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool outer, bool inner, bool third)
+                {
+                    if (outer)
+                    {
+                        if (inner)
+                            Execute();
+                        else if (third)
+                            Finish();
+                    }
+                    else
+                    {|#0:{|}
+                        Finish();
+                    }
+                }
+
+                void Execute() { }
+                void Finish() { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(
+            source,
+            VerifyCS.Diagnostic(OmitBracesForSingleLineIfAnalyzer.DiagnosticId).WithLocation(0));
+    }
 }

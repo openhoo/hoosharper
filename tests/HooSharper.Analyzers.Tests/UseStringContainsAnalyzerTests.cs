@@ -16,16 +16,16 @@ public sealed class UseStringContainsAnalyzerTests
             class Example
             {
                 bool Run(string value, string search) =>
-                    value.{|#0:IndexOf|}(search) >= 0 &&
-                    value.{|#1:IndexOf|}(search) > -1 &&
-                    value.{|#2:IndexOf|}(search) != -1 &&
-                    value.{|#3:IndexOf|}(search) < 0 &&
-                    value.{|#4:IndexOf|}(search) <= -1 &&
-                    value.{|#5:IndexOf|}(search) == -1 &&
-                    0 <= value.{|#6:IndexOf|}(search) &&
-                    -1 < value.{|#7:IndexOf|}(search) &&
-                    0 > value.{|#8:IndexOf|}(search) &&
-                    -1 >= value.{|#9:IndexOf|}(search) &&
+                    value.{|#0:IndexOf|}('x') >= 0 &&
+                    value.{|#1:IndexOf|}('x') > -1 &&
+                    value.{|#2:IndexOf|}('x') != -1 &&
+                    value.{|#3:IndexOf|}('x') < 0 &&
+                    value.{|#4:IndexOf|}('x') <= -1 &&
+                    value.{|#5:IndexOf|}('x') == -1 &&
+                    0 <= value.{|#6:IndexOf|}('x') &&
+                    -1 < value.{|#7:IndexOf|}('x') &&
+                    0 > value.{|#8:IndexOf|}('x') &&
+                    -1 >= value.{|#9:IndexOf|}('x') &&
                     value.{|#10:IndexOf|}(search, StringComparison.Ordinal) >= 0;
             }
             """;
@@ -35,16 +35,16 @@ public sealed class UseStringContainsAnalyzerTests
             class Example
             {
                 bool Run(string value, string search) =>
-                    value.Contains(search) &&
-                    value.Contains(search) &&
-                    value.Contains(search) &&
-                    !value.Contains(search) &&
-                    !value.Contains(search) &&
-                    !value.Contains(search) &&
-                    value.Contains(search) &&
-                    value.Contains(search) &&
-                    !value.Contains(search) &&
-                    !value.Contains(search) &&
+                    value.Contains('x') &&
+                    value.Contains('x') &&
+                    value.Contains('x') &&
+                    !value.Contains('x') &&
+                    !value.Contains('x') &&
+                    !value.Contains('x') &&
+                    value.Contains('x') &&
+                    value.Contains('x') &&
+                    !value.Contains('x') &&
+                    !value.Contains('x') &&
                     value.Contains(search, StringComparison.Ordinal);
             }
             """;
@@ -61,16 +61,16 @@ public sealed class UseStringContainsAnalyzerTests
             class Example
             {
                 bool Run(string value) =>
-                    value.{|#0:IndexOf|}("a") /* first */ >= 0 &&
-                    value.{|#1:IndexOf|}("b") == /* second */ -1;
+                    value.{|#0:IndexOf|}('a') /* first */ >= 0 &&
+                    value.{|#1:IndexOf|}('b') == /* second */ -1;
             }
             """;
         const string fixedSource = """
             class Example
             {
                 bool Run(string value) =>
-                    value.Contains("a")/* first */ &&
-                    !value.Contains("b")/* second */;
+                    value.Contains('a')/* first */ &&
+                    !value.Contains('b')/* second */;
             }
             """;
 
@@ -123,18 +123,56 @@ public sealed class UseStringContainsAnalyzerTests
             class Example
             {
                 const int Missing = -1;
-                bool Run(string value) => value.{|#0:IndexOf|}("x") != Missing;
+                bool Run(string value) => value.{|#0:IndexOf|}('x') != Missing;
             }
             """;
         const string fixedSource = """
             class Example
             {
                 const int Missing = -1;
-                bool Run(string value) => value.Contains("x");
+                bool Run(string value) => value.Contains('x');
             }
             """;
 
         var expected = VerifyCS.Diagnostic(UseStringContainsAnalyzer.DiagnosticId).WithLocation(0);
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
     }
+    [Fact]
+    public Task IgnoresCultureSensitiveStringIndexOf()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(string value, string search) =>
+                    value.IndexOf(search) >= 0;
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task FixesCharIndexOfWithoutChangingSemantics()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(string value) =>
+                    value.{|#0:IndexOf|}('x') >= 0;
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                bool Run(string value) =>
+                    value.Contains('x');
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(UseStringContainsAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
+
 }

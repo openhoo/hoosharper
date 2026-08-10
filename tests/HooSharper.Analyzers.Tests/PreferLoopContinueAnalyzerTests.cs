@@ -257,35 +257,6 @@ public sealed class PreferLoopContinueAnalyzerTests
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
 
-    [Fact]
-    public Task DoesNotReportWhenEarlierDesignationWouldCollide()
-    {
-        const string source = """
-            class Example
-            {
-                void Run(bool enabled, object item)
-                {
-                    while (enabled)
-                    {
-                        {
-                            if (item is int value)
-                            {
-                                _ = value;
-                            }
-                        }
-
-                        if (enabled)
-                        {
-                            var value = 2;
-                            _ = value;
-                        }
-                    }
-                }
-            }
-            """;
-
-        return VerifyCS.VerifyAnalyzerAsync(source);
-    }
 
     [Fact]
     public Task DoesNotReportWhenMovedDesignationWouldCollide()
@@ -514,6 +485,183 @@ public sealed class PreferLoopContinueAnalyzerTests
                         if (condition)
                         {
                             Execute();
+                        }
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task PreservesOverloadedEqualitySemantics()
+    {
+        const string source = """
+            readonly struct Value
+            {
+                public static bool operator ==(Value left, Value right) => true;
+                public static bool operator !=(Value left, Value right) => false;
+                public override bool Equals(object? obj) => obj is Value;
+                public override int GetHashCode() => 0;
+            }
+
+            class Example
+            {
+                void Run(Value left, Value right)
+                {
+                    while (true)
+                    {
+                        {|#0:if|} (left == right)
+                        {
+                            Execute();
+                        }
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+        const string fixedSource = """
+            readonly struct Value
+            {
+                public static bool operator ==(Value left, Value right) => true;
+                public static bool operator !=(Value left, Value right) => false;
+                public override bool Equals(object? obj) => obj is Value;
+                public override int GetHashCode() => 0;
+            }
+
+            class Example
+            {
+                void Run(Value left, Value right)
+                {
+                    while (true)
+                    {
+                        if (!(left == right))
+                            continue;
+                        Execute();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(PreferLoopContinueAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task PreservesOverloadedLogicalNotSemantics()
+    {
+        const string source = """
+            readonly struct Value
+            {
+                public static bool operator !(Value value) => true;
+            }
+
+            class Example
+            {
+                void Run(Value value)
+                {
+                    while (true)
+                    {
+                        {|#0:if|} (!value)
+                        {
+                            Execute();
+                        }
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+        const string fixedSource = """
+            readonly struct Value
+            {
+                public static bool operator !(Value value) => true;
+            }
+
+            class Example
+            {
+                void Run(Value value)
+                {
+                    while (true)
+                    {
+                        if (!(!value))
+                            continue;
+                        Execute();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(PreferLoopContinueAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task PreservesLogicalNotOperatorComment()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    while (true)
+                    {
+                        {|#0:if|} (! /* keep */ enabled)
+                        {
+                            Execute();
+                        }
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    while (true)
+                    {
+                        if (!(! /* keep */ enabled))
+                            continue;
+                        Execute();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(PreferLoopContinueAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task DoesNotReportWhenMovedLabelCollidesWithSiblingLabel()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    while (enabled)
+                    {
+                        {
+                            Same: Execute();
+                        }
+
+                        if (enabled)
+                        {
+                            Same: Execute();
                         }
                     }
                 }

@@ -64,18 +64,33 @@ public sealed class PreferLoopContinueAnalyzer : DiagnosticAnalyzer
         BlockSyntax body)
     {
         var introducedNames = CollectDeclaredNames(body);
-        if (introducedNames.Count == 0)
+        var introducedLabels = CollectDeclaredLabels(body);
+        if (introducedNames.Count == 0 && introducedLabels.Count == 0)
         {
             return false;
         }
 
         var ifIndex = loopBody.Statements.IndexOf(ifStatement);
-        for (var index = 0; index < ifIndex; index++)
+        for (var index = 0; index < loopBody.Statements.Count; index++)
         {
+            if (index == ifIndex)
+            {
+                continue;
+            }
+
             foreach (var node in loopBody.Statements[index].DescendantNodes())
             {
-                var name = GetDeclaredName(node);
-                if (name is not null && introducedNames.Contains(name))
+                if (index < ifIndex)
+                {
+                    var name = GetDeclaredName(node);
+                    if (name is not null && introducedNames.Contains(name))
+                    {
+                        return true;
+                    }
+                }
+
+                if (node is LabeledStatementSyntax label &&
+                    introducedLabels.Contains(label.Identifier.ValueText))
                 {
                     return true;
                 }
@@ -98,6 +113,20 @@ public sealed class PreferLoopContinueAnalyzer : DiagnosticAnalyzer
         }
 
         return names;
+    }
+
+    private static HashSet<string> CollectDeclaredLabels(SyntaxNode scope)
+    {
+        var labels = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (var node in scope.DescendantNodes())
+        {
+            if (node is LabeledStatementSyntax label)
+            {
+                labels.Add(label.Identifier.ValueText);
+            }
+        }
+
+        return labels;
     }
 
     private static string? GetDeclaredName(SyntaxNode node) => node switch

@@ -261,6 +261,185 @@ public sealed class UseUsingDeclarationAnalyzerTests
 
         return test.RunAsync(TestContext.Current.CancellationToken);
     }
+    [Fact]
+    public Task AcceptsDefaultLanguageVersion()
+    {
+        const string source = """
+            using System.IO;
+
+            class Example
+            {
+                void Run()
+                {
+                    {|#0:using|} (var stream = new MemoryStream())
+                    {
+                        stream.WriteByte(1);
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.IO;
+
+            class Example
+            {
+                void Run()
+                {
+                    using var stream = new MemoryStream();
+                    stream.WriteByte(1);
+                }
+            }
+            """;
+
+        var test = new CSharpCodeFixTest<
+            UseUsingDeclarationAnalyzer,
+            UseUsingDeclarationCodeFixProvider,
+            DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+            FixedCode = fixedSource,
+        };
+        test.ExpectedDiagnostics.Add(VerifyCS.Diagnostic(UseUsingDeclarationAnalyzer.DiagnosticId).WithLocation(0));
+        test.SolutionTransforms.Add((solution, projectId) =>
+            solution.WithProjectParseOptions(
+                projectId,
+                ((CSharpParseOptions)solution.GetProject(projectId)!.ParseOptions!)
+                    .WithLanguageVersion(LanguageVersion.Default)));
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public Task DoesNotReportInitializerBindingToMovedLocalFunction()
+    {
+        const string source = """
+            using System.IO;
+
+            class Example
+            {
+                MemoryStream Create() => new();
+
+                void Run()
+                {
+                    using (var stream = Create())
+                    {
+                        stream.WriteByte(1);
+                        void Create() { }
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task PreservesAwaitTokenComments()
+    {
+        const string source = """
+            using System;
+            using System.Threading.Tasks;
+
+            class Resource : IAsyncDisposable
+            {
+                public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+            }
+
+            class Example
+            {
+                async Task Run()
+                {
+                    await /* keep await comment */ {|#0:using|} (var resource = new Resource())
+                    {
+                        _ = resource;
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System;
+            using System.Threading.Tasks;
+
+            class Resource : IAsyncDisposable
+            {
+                public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+            }
+
+            class Example
+            {
+                async Task Run()
+                {
+                    /* keep await comment */
+                    await using var resource = new Resource();
+                    _ = resource;
+                }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(UseUsingDeclarationAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task PreservesMixedEolStringLiterals()
+    {
+        var source = """"
+            using System;
+
+            class Example
+            {
+                void Run()
+                {
+                    string verbatim = @"first
+            second";
+                    string raw = """
+            raw
+            text
+            """;
+                    {|#0:using|} (var resource = new Resource())
+                    {
+                        Console.WriteLine(resource);
+                    }
+                }
+
+                sealed class Resource : IDisposable
+                {
+                    public void Dispose() { }
+                    public override string ToString() => "resource";
+                }
+            }
+            """".ReplaceLineEndings("\r\n");
+        source = source.Replace("\r\n                    string raw", "\n                    string raw");
+
+        var fixedSource = """"
+            using System;
+
+            class Example
+            {
+                void Run()
+                {
+                    string verbatim = @"first
+            second";
+                    string raw = """
+            raw
+            text
+            """;
+                    using var resource = new Resource();
+                    Console.WriteLine(resource);
+                }
+
+                sealed class Resource : IDisposable
+                {
+                    public void Dispose() { }
+                    public override string ToString() => "resource";
+                }
+            }
+            """".ReplaceLineEndings("\r\n");
+        fixedSource = fixedSource.Replace("\r\n                    string raw", "\n                    string raw");
+
+        var expected = VerifyCS.Diagnostic(UseUsingDeclarationAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
 
     [Fact]
     public Task PreservesCommentsAroundUsingAndBody()

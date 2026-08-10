@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -42,17 +43,44 @@ public sealed class SimplifyBooleanComparisonAnalyzer : DiagnosticAnalyzer
         }
 
         if (context.SemanticModel.GetOperation(comparison, context.CancellationToken) is not IBinaryOperation operation ||
-            operation.OperatorMethod is not null ||
-            operation.LeftOperand.Type?.SpecialType != SpecialType.System_Boolean ||
-            operation.RightOperand.Type?.SpecialType != SpecialType.System_Boolean ||
-            operation.Type?.SpecialType != SpecialType.System_Boolean)
+            !IsSafeComparison(operation) ||
+            HasEligibleAncestor(comparison, context.SemanticModel, context.CancellationToken))
         {
             return;
         }
 
-
         context.ReportDiagnostic(Diagnostic.Create(Rule, comparison.OperatorToken.GetLocation()));
     }
+
+    private static bool IsSafeComparison(IBinaryOperation operation) =>
+        operation.OperatorMethod is null &&
+        operation.LeftOperand.Type?.SpecialType == SpecialType.System_Boolean &&
+        operation.RightOperand.Type?.SpecialType == SpecialType.System_Boolean &&
+        operation.Type?.SpecialType == SpecialType.System_Boolean &&
+        !ContainsUserDefinedNot(operation);
+
+    private static bool HasEligibleAncestor(
+        BinaryExpressionSyntax comparison,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        for (var ancestor = comparison.Parent; ancestor is not null; ancestor = ancestor.Parent)
+        {
+            if (ancestor is BinaryExpressionSyntax parent &&
+                TryGetBooleanLiteralOperand(parent, out _) &&
+                semanticModel.GetOperation(parent, cancellationToken) is IBinaryOperation operation &&
+                IsSafeComparison(operation))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsUserDefinedNot(IOperation operation) =>
+        operation.DescendantsAndSelf().OfType<IUnaryOperation>().Any(unary =>
+            unary.OperatorKind == UnaryOperatorKind.Not && unary.OperatorMethod is not null);
 
     internal static bool TryGetBooleanLiteralOperand(
         BinaryExpressionSyntax comparison,

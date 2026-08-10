@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -32,7 +33,8 @@ public sealed class UseUsingDeclarationAnalyzer : DiagnosticAnalyzer
 
     private static void AnalyzeUsingStatement(SyntaxNodeAnalysisContext context)
     {
-        if (context.Node.SyntaxTree.Options is not CSharpParseOptions { LanguageVersion: >= LanguageVersion.CSharp8 })
+        if (context.Node.SyntaxTree.Options is not CSharpParseOptions parseOptions ||
+            !SupportsUsingDeclarations(parseOptions.LanguageVersion))
         {
             return;
         }
@@ -85,6 +87,21 @@ public sealed class UseUsingDeclarationAnalyzer : DiagnosticAnalyzer
             }
         }
 
+        var initializer = usingStatement.Declaration!.Variables[0].Initializer!.Value;
+        var localFunctionNames = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (var localFunction in body.DescendantNodes().OfType<LocalFunctionStatementSyntax>())
+        {
+            localFunctionNames.Add(localFunction.Identifier.ValueText);
+        }
+
+        foreach (var identifier in initializer.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
+        {
+            if (localFunctionNames.Contains(identifier.Identifier.ValueText))
+            {
+                return true;
+            }
+        }
+
         var usingIndex = parentBlock.Statements.IndexOf(usingStatement);
         for (var index = 0; index < usingIndex; index++)
         {
@@ -99,4 +116,7 @@ public sealed class UseUsingDeclarationAnalyzer : DiagnosticAnalyzer
 
         return false;
     }
+
+    private static bool SupportsUsingDeclarations(LanguageVersion languageVersion) =>
+        languageVersion == LanguageVersion.Default || languageVersion >= LanguageVersion.CSharp8;
 }

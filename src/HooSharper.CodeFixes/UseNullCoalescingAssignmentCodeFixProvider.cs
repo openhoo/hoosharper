@@ -75,9 +75,9 @@ public sealed class UseNullCoalescingAssignmentCodeFixProvider : CodeFixProvider
         var replacement = SyntaxFactory.ExpressionStatement(
                 SyntaxFactory.AssignmentExpression(
                     SyntaxKind.CoalesceAssignmentExpression,
-                    assignment.Left.WithoutTrivia(),
+                    assignment.Left,
                     SyntaxFactory.Token(SyntaxKind.QuestionQuestionEqualsToken),
-                    assignment.Right.WithoutTrivia()))
+                    assignment.Right))
             .WithLeadingTrivia(leadingTrivia)
             .WithTrailingTrivia(trailingTrivia);
 

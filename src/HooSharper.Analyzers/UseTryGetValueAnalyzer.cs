@@ -50,6 +50,16 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
         INamedTypeSymbol? dictionaryInterface)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
+        if (context.SemanticModel.SyntaxTree.Options is CSharpParseOptions
+            {
+                LanguageVersion: var languageVersion,
+            } &&
+            languageVersion != LanguageVersion.Default &&
+            (int)languageVersion < (int)LanguageVersion.CSharp7)
+        {
+            return;
+        }
+
         if (ifStatement.Else is not null || HasDirective(ifStatement) ||
             ifStatement.Condition is not InvocationExpressionSyntax
             {
@@ -66,18 +76,22 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
 
         var key = invocation.ArgumentList.Arguments[0].Expression;
         var dictionaryOperation = context.SemanticModel.GetOperation(memberAccess.Expression, context.CancellationToken);
-        var keyOperation = context.SemanticModel.GetOperation(key, context.CancellationToken);
+        var invocationOperation = context.SemanticModel.GetOperation(invocation, context.CancellationToken) as IInvocationOperation;
+        var keyOperation = invocationOperation?.Arguments.Length == 1
+            ? invocationOperation.Arguments[0].Value
+            : null;
         if (!IsCallbackStableOperation(dictionaryOperation) ||
             !IsCallbackStableOperation(keyOperation) ||
+            !HasProvenDefaultComparer(
+                dictionaryOperation,
+                context.SemanticModel,
+                context.CancellationToken,
+                dictionaryDefinition) ||
             dictionaryOperation?.Type is not INamedTypeSymbol namedType ||
             (!SymbolEqualityComparer.Default.Equals(namedType.OriginalDefinition, dictionaryDefinition) &&
-             !SymbolEqualityComparer.Default.Equals(namedType.OriginalDefinition, dictionaryInterface)))
-        {
-            return;
-        }
-
-        var invocationOperation = context.SemanticModel.GetOperation(invocation, context.CancellationToken) as IInvocationOperation;
-        if (invocationOperation is null || !IsDictionaryMember(
+             !SymbolEqualityComparer.Default.Equals(namedType.OriginalDefinition, dictionaryInterface)) ||
+            invocationOperation is null ||
+            !IsDictionaryMember(
                 invocationOperation.TargetMethod.OriginalDefinition.ContainingType,
                 dictionaryDefinition,
                 dictionaryInterface))
@@ -118,8 +132,143 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
             context.ReportDiagnostic(Diagnostic.Create(Rule, memberAccess.Name.GetLocation()));
             return;
         }
+
+    }
+    private static bool HasProvenDefaultComparer(
+        IOperation? operation,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken,
+        INamedTypeSymbol? dictionaryDefinition)
+    {
+        operation = Unwrap(operation);
+        if (operation?.Type is not INamedTypeSymbol dictionaryType ||
+            dictionaryType.TypeArguments.Length != 2 ||
+            !IsProvablyPureEqualityType(dictionaryType.TypeArguments[0]) ||
+            operation is not IFieldReferenceOperation field ||
+            !field.Field.IsReadOnly ||
+            field.Field.IsVolatile ||
+            !IsNeverReassigned(field.Field, semanticModel, cancellationToken))
+        {
+            return false;
+        }
+
+        foreach (var syntaxReference in field.Field.DeclaringSyntaxReferences)
+        {
+            if (syntaxReference.GetSyntax(cancellationToken) is VariableDeclaratorSyntax
+                {
+                    Initializer.Value: var initializer,
+                } &&
+                semanticModel.GetOperation(initializer, cancellationToken) is IObjectCreationOperation
+                {
+                    Type: INamedTypeSymbol createdType,
+                    Arguments.Length: 0,
+                } &&
+                SymbolEqualityComparer.Default.Equals(
+                    createdType.OriginalDefinition,
+                    dictionaryDefinition))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
+    private static bool IsNeverReassigned(
+        IFieldSymbol field,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        if (field.ContainingType.DeclaringSyntaxReferences.Length != 1 ||
+            field.ContainingType.DeclaringSyntaxReferences[0].GetSyntax(cancellationToken) is not TypeDeclarationSyntax typeDeclaration ||
+            typeDeclaration.SyntaxTree != semanticModel.SyntaxTree)
+        {
+            return false;
+        }
+
+        foreach (var node in typeDeclaration.DescendantNodes())
+        {
+            if (node is IdentifierNameSyntax identifier &&
+                SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(identifier, cancellationToken).Symbol,
+                    field) &&
+                IsWrittenReference(identifier))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsWrittenReference(IdentifierNameSyntax identifier)
+    {
+        for (SyntaxNode? node = identifier; node?.Parent is { } parent; node = parent)
+        {
+            if (parent is AssignmentExpressionSyntax assignment)
+            {
+                return assignment.Left.Span.Contains(identifier.Span);
+            }
+
+            if (parent is PrefixUnaryExpressionSyntax
+                {
+                    RawKind: (int)SyntaxKind.PreIncrementExpression or
+                        (int)SyntaxKind.PreDecrementExpression,
+                } ||
+                parent is PostfixUnaryExpressionSyntax
+                {
+                    RawKind: (int)SyntaxKind.PostIncrementExpression or
+                        (int)SyntaxKind.PostDecrementExpression,
+                } ||
+                parent is ArgumentSyntax
+                {
+                    RefKindKeyword.RawKind: (int)SyntaxKind.RefKeyword or
+                        (int)SyntaxKind.OutKeyword,
+                } ||
+                parent is RefExpressionSyntax)
+            {
+                return true;
+            }
+
+            if (parent is StatementSyntax or MemberDeclarationSyntax)
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsProvablyPureEqualityType(ITypeSymbol type)
+    {
+        if (type.TypeKind == TypeKind.Enum)
+        {
+            return true;
+        }
+
+        if (type is INamedTypeSymbol namedType &&
+            namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
+            namedType.TypeArguments.Length == 1)
+        {
+            return IsProvablyPureEqualityType(namedType.TypeArguments[0]);
+        }
+
+        return type.SpecialType is
+            SpecialType.System_Boolean or
+            SpecialType.System_Byte or
+            SpecialType.System_SByte or
+            SpecialType.System_Int16 or
+            SpecialType.System_UInt16 or
+            SpecialType.System_Int32 or
+            SpecialType.System_UInt32 or
+            SpecialType.System_Int64 or
+            SpecialType.System_UInt64 or
+            SpecialType.System_Char or
+            SpecialType.System_Single or
+            SpecialType.System_Double or
+            SpecialType.System_Decimal or
+            SpecialType.System_String;
+    }
     private static bool IsDictionaryMember(
         INamedTypeSymbol containingType,
         INamedTypeSymbol? dictionaryDefinition,
@@ -168,6 +317,12 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
 
         for (SyntaxNode? node = elementAccess.Parent; node is not null; node = node.Parent)
         {
+            if (node is AssignmentExpressionSyntax assignment &&
+                assignment.Left.Span.Contains(elementAccess.Span))
+            {
+                return false;
+            }
+
             if (node is RefExpressionSyntax)
             {
                 return false;
@@ -196,13 +351,13 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
         foreach (var node in statement.DescendantNodes(ShouldDescendInto))
         {
             if (node is AssignmentExpressionSyntax assignment &&
-                (IsSameExpression(assignment.Left, dictionary) ||
-                 IsSameExpression(assignment.Left, key) ||
-                 IsDictionaryIndexer(assignment.Left, dictionary)))
+                (assignment.Left is ElementAccessExpressionSyntax ||
+                 ContainsMatchingDictionaryIndexer(assignment.Left, dictionary, key) ||
+                 IsSameExpression(assignment.Left, dictionary) ||
+                 IsSameExpression(assignment.Left, key)))
             {
                 return true;
             }
-
             var mutatedOperand = node switch
             {
                 PrefixUnaryExpressionSyntax prefix when
@@ -214,7 +369,8 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
                 _ => null,
             };
             if (mutatedOperand is not null &&
-                (IsSameExpression(mutatedOperand, dictionary) ||
+                (mutatedOperand is ElementAccessExpressionSyntax ||
+                 IsSameExpression(mutatedOperand, dictionary) ||
                  IsSameExpression(mutatedOperand, key) ||
                  IsDictionaryIndexer(mutatedOperand, dictionary)))
             {
@@ -222,6 +378,27 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
             }
 
             if (node is InvocationExpressionSyntax)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsMatchingDictionaryIndexer(
+        ExpressionSyntax target,
+        ExpressionSyntax dictionary,
+        ExpressionSyntax key)
+    {
+        foreach (var node in target.DescendantNodesAndSelf())
+        {
+            if (node is ElementAccessExpressionSyntax
+                {
+                    ArgumentList.Arguments.Count: 1,
+                } elementAccess &&
+                IsSameExpression(elementAccess.Expression, dictionary) &&
+                IsSameExpression(elementAccess.ArgumentList.Arguments[0].Expression, key))
             {
                 return true;
             }
@@ -245,12 +422,17 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
         {
             operation = operation switch
             {
-                IConversionOperation { IsImplicit: true } conversion => conversion.Operand,
+                IConversionOperation
+                {
+                    IsImplicit: true,
+                    OperatorMethod: null,
+                } conversion => conversion.Operand,
                 IParenthesizedOperation parenthesized => parenthesized.Operand,
                 _ => operation,
             };
 
-            if (operation is not IConversionOperation { IsImplicit: true } and not IParenthesizedOperation)
+            if (operation is not IConversionOperation { IsImplicit: true, OperatorMethod: null } and
+                not IParenthesizedOperation)
             {
                 return operation;
             }

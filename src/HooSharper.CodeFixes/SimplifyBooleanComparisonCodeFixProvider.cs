@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Composition;
 using System.Linq;
@@ -9,6 +10,7 @@ using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace HooSharper.CodeFixes;
 
@@ -45,30 +47,91 @@ public sealed class SimplifyBooleanComparisonCodeFixProvider : CodeFixProvider
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-        if (root is null || !TryGetBooleanLiteralOperand(comparison, out var expression))
+        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+        if (root is null || semanticModel is null)
         {
             return document;
         }
 
+        var rewritten = new NestedComparisonRewriter(semanticModel, cancellationToken).Visit(comparison);
+        return rewritten is null || rewritten == comparison
+            ? document
+            : document.WithSyntaxRoot(root.ReplaceNode(comparison, rewritten));
+    }
+
+    private sealed class NestedComparisonRewriter : CSharpSyntaxRewriter
+    {
+        private readonly SemanticModel semanticModel;
+        private readonly CancellationToken cancellationToken;
+
+        public NestedComparisonRewriter(SemanticModel semanticModel, CancellationToken cancellationToken)
+        {
+            this.semanticModel = semanticModel;
+            this.cancellationToken = cancellationToken;
+        }
+
+        public override SyntaxNode? VisitBinaryExpression(BinaryExpressionSyntax node)
+        {
+            var visited = (BinaryExpressionSyntax)base.VisitBinaryExpression(node)!;
+            if (!TryGetBooleanLiteralOperand(visited, out var expression) ||
+                !IsSafeComparison(semanticModel.GetOperation(node, cancellationToken)))
+            {
+                return visited;
+            }
+
+            return SimplifyComparison(visited, expression);
+        }
+    }
+
+    private static ExpressionSyntax SimplifyComparison(
+        BinaryExpressionSyntax comparison,
+        ExpressionSyntax expression)
+    {
         var literal = comparison.Left.IsKind(SyntaxKind.TrueLiteralExpression)
             ? comparison.Left
             : comparison.Right;
         var literalValue = literal.IsKind(SyntaxKind.TrueLiteralExpression);
         var preserveValue = comparison.IsKind(SyntaxKind.EqualsExpression) == literalValue;
-
-        var interstitialTrivia = SyntaxFactory.TriviaList(comparison.DescendantTrivia()
-            .Where(trivia =>
-                !expression.Span.Contains(trivia.Span) &&
-                !trivia.IsKind(SyntaxKind.WhitespaceTrivia) &&
-                !trivia.IsKind(SyntaxKind.EndOfLineTrivia)));
         var expressionWithoutOuterTrivia = expression.WithoutLeadingTrivia().WithoutTrailingTrivia();
         var replacement = preserveValue
             ? expressionWithoutOuterTrivia
             : Negate(expressionWithoutOuterTrivia);
-        replacement = replacement.WithLeadingTrivia(comparison.GetLeadingTrivia())
-            .WithTrailingTrivia(interstitialTrivia.AddRange(comparison.GetTrailingTrivia()));
+        return replacement.WithLeadingTrivia(comparison.GetLeadingTrivia())
+            .WithTrailingTrivia(
+                CollectInterstitialTrivia(comparison, expression)
+                    .AddRange(comparison.GetTrailingTrivia()));
+    }
 
-        return document.WithSyntaxRoot(root.ReplaceNode(comparison, replacement));
+    private static bool IsSafeComparison(IOperation? operation) =>
+        operation is IBinaryOperation binary &&
+        binary.OperatorMethod is null &&
+        binary.LeftOperand.Type?.SpecialType == SpecialType.System_Boolean &&
+        binary.RightOperand.Type?.SpecialType == SpecialType.System_Boolean &&
+        binary.Type?.SpecialType == SpecialType.System_Boolean &&
+        !binary.DescendantsAndSelf().OfType<IUnaryOperation>().Any(unary =>
+            unary.OperatorKind == UnaryOperatorKind.Not && unary.OperatorMethod is not null);
+
+    private static SyntaxTriviaList CollectInterstitialTrivia(
+        BinaryExpressionSyntax comparison,
+        ExpressionSyntax expression)
+    {
+        var trivia = comparison.DescendantTrivia()
+            .Where(item =>
+                !expression.Span.Contains(item.Span) &&
+                !item.IsKind(SyntaxKind.WhitespaceTrivia) &&
+                !item.IsKind(SyntaxKind.EndOfLineTrivia));
+        var result = new List<SyntaxTrivia>();
+        foreach (var item in trivia)
+        {
+            result.Add(item);
+            if (item.IsKind(SyntaxKind.SingleLineCommentTrivia) ||
+                item.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia))
+            {
+                result.Add(SyntaxFactory.ElasticCarriageReturnLineFeed);
+            }
+        }
+
+        return SyntaxFactory.TriviaList(result);
     }
 
     private static ExpressionSyntax Negate(ExpressionSyntax expression)

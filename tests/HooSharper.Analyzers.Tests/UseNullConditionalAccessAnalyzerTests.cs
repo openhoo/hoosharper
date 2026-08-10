@@ -408,4 +408,65 @@ public sealed class UseNullConditionalAccessAnalyzerTests
 
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
+
+    [Fact]
+    public Task IgnoresRefReturnReceiver()
+    {
+        const string source = """
+            class Service
+            {
+                public int Value;
+            }
+
+            class Example
+            {
+                static ref Service? Get(ref Service? service) => ref service;
+
+                int? Invoke(ref Service? service) =>
+                    Get(ref service) is null ? null : Get(ref service).Value;
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task AcceptsDefaultLanguageVersion()
+    {
+        const string source = """
+            class Example
+            {
+                int? GetLength(string? value) =>
+                    value is null {|#0:?|} null : value.Length;
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                int? GetLength(string? value) =>
+                    value?.Length;
+            }
+            """;
+
+        var test = new CSharpCodeFixTest<
+            UseNullConditionalAccessAnalyzer,
+            UseNullConditionalAccessCodeFixProvider,
+            DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+            FixedCode = fixedSource,
+        };
+        test.ExpectedDiagnostics.Add(
+            VerifyCS.Diagnostic(UseNullConditionalAccessAnalyzer.DiagnosticId).WithLocation(0));
+        test.SolutionTransforms.Add((solution, projectId) =>
+        {
+            var project = solution.GetProject(projectId)!;
+            return solution.WithProjectParseOptions(
+                projectId,
+                ((CSharpParseOptions)project.ParseOptions!).WithLanguageVersion(LanguageVersion.Default));
+        });
+
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
 }

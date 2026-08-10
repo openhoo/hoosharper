@@ -208,6 +208,48 @@ public sealed class UseNotPatternAnalyzerTests
     }
 
     [Fact]
+    public Task DoesNotReportImplicitQueryableExpressionTree()
+    {
+        const string source = """
+            using System.Linq;
+
+            class Example
+            {
+                IQueryable<object> Run(IQueryable<object> query) =>
+                    from value in query
+                    where !(value is string)
+                    select value;
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task FixAllConvertsNestedPatternsInOnePass()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(object value) =>
+                !(({|#0:!|}(value is string)) is bool);
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                bool Run(object value) =>
+                !((value is not string) is bool);
+            }
+            """;
+
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(UseNotPatternAnalyzer.DiagnosticId).WithLocation(0),
+        };
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+    [Fact]
     public Task FixAllConvertsEveryEligibleExpression()
     {
         const string source = """

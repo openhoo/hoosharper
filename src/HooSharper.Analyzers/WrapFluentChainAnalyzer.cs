@@ -17,6 +17,7 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
     public const string TabWidthOption = "tab_width";
 
     private const int DefaultMaximumLineLength = 140;
+    public const int MaximumConfiguredWidth = 4096;
 
     private static readonly DiagnosticDescriptor Rule = new(
         DiagnosticId,
@@ -39,26 +40,13 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeMemberAccess(SyntaxNodeAnalysisContext context)
     {
         var memberAccess = (MemberAccessExpressionSyntax)context.Node;
-        if (memberAccess.Parent is MemberAccessExpressionSyntax
-            {
-                RawKind: (int)SyntaxKind.SimpleMemberAccessExpression,
-                Expression: var parentExpression,
-            } && parentExpression == memberAccess ||
-            memberAccess.Parent is InvocationExpressionSyntax { Expression: var invocationExpression } invocation &&
-            invocationExpression == memberAccess &&
-            invocation.Parent is MemberAccessExpressionSyntax
-            {
-                RawKind: (int)SyntaxKind.SimpleMemberAccessExpression,
-                Expression: var invocationParentExpression,
-            } && invocationParentExpression == invocation)
-        {
-            return;
-        }
-
         var chain = GetOutermostChain(memberAccess);
         if (GetLastMemberAccess(chain) != memberAccess ||
             !HasStatementOrArrowAncestor(chain) ||
             HasDirective(chain) ||
+            HasBoundaryOnLeftSpine(chain) ||
+            !HasInvocation(chain, context) ||
+            !IsSupportedLanguageVersion(chain, context) ||
             !TryGetChainDotCount(chain, out var dotCount) ||
             dotCount < 2)
         {
@@ -130,17 +118,19 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
             var character = text[position];
             if (character == '\t')
             {
-                column += tabWidth - column % tabWidth;
+                var increment = tabWidth - column % tabWidth;
+                column = column > int.MaxValue - increment ? int.MaxValue : column + increment;
             }
-            else if (!char.IsLowSurrogate(character) || position == line.Start ||
-                     !char.IsHighSurrogate(text[position - 1]))
+            else if ((!char.IsLowSurrogate(character) || position == line.Start ||
+                      !char.IsHighSurrogate(text[position - 1])) &&
+                     column < int.MaxValue)
             {
                 column++;
             }
         }
 
         return column;
-     }
+    }
 
     private static bool TryGetPositiveInteger(
         AnalyzerConfigOptions options,
@@ -150,7 +140,8 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
         value = 0;
         return options.TryGetValue(key, out var configuredValue) &&
                int.TryParse(configuredValue, out value) &&
-               value > 0;
+               value > 0 &&
+               value <= MaximumConfiguredWidth;
     }
 
     internal static ExpressionSyntax GetOutermostChain(ExpressionSyntax expression)
@@ -197,6 +188,139 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
                 default:
                     current = null;
                     break;
+            }
+        }
+
+        return true;
+    }
+    private static bool HasInvocation(ExpressionSyntax chain, SyntaxNodeAnalysisContext context)
+    {
+        ExpressionSyntax? current = chain;
+        while (current is not null)
+        {
+            switch (current)
+            {
+                case InvocationExpressionSyntax invocation:
+                    if (invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
+                        context.SemanticModel.GetSymbolInfo(memberAccess, context.CancellationToken).Symbol is IMethodSymbol)
+                    {
+                        return !IsStaticOrTypeRoot(GetChainBase(chain), context);
+                    }
+
+                    current = invocation.Expression;
+                    break;
+                case MemberAccessExpressionSyntax chainedMemberAccess
+                    when chainedMemberAccess.IsKind(SyntaxKind.SimpleMemberAccessExpression):
+                    current = chainedMemberAccess.Expression;
+                    break;
+                case ElementAccessExpressionSyntax elementAccess:
+                    current = elementAccess.Expression;
+                    break;
+                case ParenthesizedExpressionSyntax parenthesized:
+                    current = parenthesized.Expression;
+                    break;
+                default:
+                    return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static ExpressionSyntax GetChainBase(ExpressionSyntax chain)
+    {
+        ExpressionSyntax current = chain;
+        while (true)
+        {
+            var next = current switch
+            {
+                InvocationExpressionSyntax invocation => invocation.Expression,
+                MemberAccessExpressionSyntax memberAccess
+                    when memberAccess.IsKind(SyntaxKind.SimpleMemberAccessExpression) => memberAccess.Expression,
+                ParenthesizedExpressionSyntax parenthesized => parenthesized.Expression,
+                ElementAccessExpressionSyntax elementAccess => elementAccess.Expression,
+                _ => current,
+            };
+
+            if (next == current)
+            {
+                return current;
+            }
+
+            current = next;
+        }
+    }
+
+    private static bool IsStaticOrTypeRoot(
+        ExpressionSyntax root,
+        SyntaxNodeAnalysisContext context)
+    {
+        var symbol = context.SemanticModel.GetSymbolInfo(root, context.CancellationToken).Symbol;
+        return symbol is INamespaceSymbol or INamedTypeSymbol ||
+            symbol is IFieldSymbol { IsStatic: true } ||
+            symbol is IPropertySymbol { IsStatic: true };
+    }
+
+    private static bool HasBoundaryOnLeftSpine(ExpressionSyntax chain)
+    {
+        ExpressionSyntax? current = chain;
+        while (current is not null)
+        {
+            switch (current)
+            {
+                case InvocationExpressionSyntax invocation:
+                    current = invocation.Expression;
+                    break;
+                case MemberAccessExpressionSyntax memberAccess
+                    when memberAccess.IsKind(SyntaxKind.SimpleMemberAccessExpression):
+                    current = memberAccess.Expression;
+                    break;
+                case ParenthesizedExpressionSyntax parenthesized:
+                    return HasAtLeastTwoDots(parenthesized.Expression);
+                case ElementAccessExpressionSyntax elementAccess:
+                    return HasAtLeastTwoDots(elementAccess.Expression);
+                default:
+                    return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasAtLeastTwoDots(ExpressionSyntax expression)
+    {
+        while (expression is ParenthesizedExpressionSyntax parenthesized)
+        {
+            expression = parenthesized.Expression;
+        }
+
+        return TryGetChainDotCount(expression, out var count) && count >= 2;
+    }
+
+    private static bool IsSupportedLanguageVersion(
+        ExpressionSyntax chain,
+        SyntaxNodeAnalysisContext context)
+    {
+        if (context.Node.SyntaxTree.Options is not CSharpParseOptions { LanguageVersion: var languageVersion } ||
+            languageVersion == LanguageVersion.Default ||
+            languageVersion >= LanguageVersion.CSharp11)
+        {
+            return true;
+        }
+
+        ExpressionSyntax? current = chain;
+        while (current is not null)
+        {
+            switch (current)
+            {
+                case InvocationExpressionSyntax invocation:
+                    current = invocation.Expression;
+                    break;
+                case MemberAccessExpressionSyntax memberAccess:
+                    current = memberAccess.Expression;
+                    break;
+                default:
+                    return current is not InterpolatedStringExpressionSyntax;
             }
         }
 

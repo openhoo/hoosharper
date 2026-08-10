@@ -15,8 +15,9 @@ public sealed class UseHashSetAddResultAnalyzerTests
 
             class Example
             {
-                void Add(HashSet<string> set, string value)
+                void Add(string value)
                 {
+                    var set = new HashSet<string>();
                     if (!set.{|#0:Contains|}(value))
                     {
                         set.Add(value);
@@ -29,8 +30,9 @@ public sealed class UseHashSetAddResultAnalyzerTests
 
             class Example
             {
-                void Add(HashSet<string> set, string value)
+                void Add(string value)
                 {
+                    var set = new HashSet<string>();
                     set.Add(value);
                 }
             }
@@ -50,8 +52,9 @@ public sealed class UseHashSetAddResultAnalyzerTests
 
             class Example
             {
-                void Add(HashSet<int> set, int value)
+                void Add(int value)
                 {
+                    var set = new HashSet<int>();
                     if (!set.{|#0:Contains|}(value))
                     {
                         set.Add(value);
@@ -65,8 +68,9 @@ public sealed class UseHashSetAddResultAnalyzerTests
 
             class Example
             {
-                void Add(HashSet<int> set, int value)
+                void Add(int value)
                 {
+                    var set = new HashSet<int>();
                     if (set.Add(value))
                     {
                         System.Console.WriteLine(value);
@@ -87,8 +91,9 @@ public sealed class UseHashSetAddResultAnalyzerTests
 
             class Example
             {
-                void Add(HashSet<int> set, int value)
+                void Add(int value)
                 {
+                    var set = new HashSet<int>();
                     // Before the if.
                     if (!set.Contains(/* value */ value))
                     {
@@ -104,8 +109,9 @@ public sealed class UseHashSetAddResultAnalyzerTests
 
             class Example
             {
-                void Add(HashSet<int> set, int value)
+                void Add(int value)
                 {
+                    var set = new HashSet<int>();
                     // Before the if.
                     if (/* value */
             set.Add(value))
@@ -119,7 +125,7 @@ public sealed class UseHashSetAddResultAnalyzerTests
             """;
 
         var expected = VerifyCS.Diagnostic(UseHashSetAddResultAnalyzer.DiagnosticId)
-            .WithSpan(8, 18, 8, 26);
+            .WithSpan(9, 18, 9, 26);
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
     }
 
@@ -131,8 +137,9 @@ public sealed class UseHashSetAddResultAnalyzerTests
 
             class Example
             {
-                void Add(HashSet<int> set, int first, int second)
+                void Add(int first, int second)
                 {
+                    var set = new HashSet<int>();
                     if (!set.{|#0:Contains|}(first))
                     {
                         set.Add(first);
@@ -151,8 +158,9 @@ public sealed class UseHashSetAddResultAnalyzerTests
 
             class Example
             {
-                void Add(HashSet<int> set, int first, int second)
+                void Add(int first, int second)
                 {
+                    var set = new HashSet<int>();
                     set.Add(first);
 
                     if (set.Add(second))
@@ -455,6 +463,38 @@ public sealed class UseHashSetAddResultAnalyzerTests
 
         var expected = VerifyCS.Diagnostic(UseHashSetAddResultAnalyzer.DiagnosticId).WithLocation(0);
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task IgnoresCountingComparerForLiteralAndLocalValue()
+    {
+        const string source = """
+            using System;
+            using System.Collections.Generic;
+
+            sealed class CountingComparer : IEqualityComparer<int>
+            {
+                public int Count;
+                public bool Equals(int x, int y) { Count++; return x == y; }
+                public int GetHashCode(int value) { Count++; return value; }
+            }
+
+            class Example
+            {
+                void Run()
+                {
+                    var comparer = new CountingComparer();
+                    var set = new HashSet<int>(comparer);
+                    var value = 1;
+                    if (!set.Contains(value))
+                    {
+                        set.Add(value);
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
     }
 
 }

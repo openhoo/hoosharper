@@ -378,5 +378,176 @@ public sealed class PreferEarlyReturnAnalyzerTests
 
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
+    [Fact]
+    public Task RejectsDirectiveContainingFinalIf()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    if (enabled)
+                    {
+            #if DEBUG
+                        Execute();
+            #endif
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task PreservesOverloadedEqualitySemantics()
+    {
+        const string source = """
+            readonly struct Value
+            {
+                public static bool operator ==(Value left, Value right) => true;
+                public static bool operator !=(Value left, Value right) => false;
+                public override bool Equals(object? obj) => obj is Value;
+                public override int GetHashCode() => 0;
+            }
+
+            class Example
+            {
+                void Run(Value left, Value right)
+                {
+                    {|#0:if|} (left == right)
+                    {
+                        Execute();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+        const string fixedSource = """
+            readonly struct Value
+            {
+                public static bool operator ==(Value left, Value right) => true;
+                public static bool operator !=(Value left, Value right) => false;
+                public override bool Equals(object? obj) => obj is Value;
+                public override int GetHashCode() => 0;
+            }
+
+            class Example
+            {
+                void Run(Value left, Value right)
+                {
+                    if (!(left == right))
+                        return;
+                    Execute();
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(PreferEarlyReturnAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+    [Fact]
+    public Task PreservesOverloadedLogicalNotSemantics()
+    {
+        const string source = """
+            readonly struct Value
+            {
+                public static bool operator !(Value value) => true;
+            }
+
+            class Example
+            {
+                void Run(Value value)
+                {
+                    {|#0:if|} (!value)
+                    {
+                        Execute();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+        const string fixedSource = """
+            readonly struct Value
+            {
+                public static bool operator !(Value value) => true;
+            }
+
+            class Example
+            {
+                void Run(Value value)
+                {
+                    if (!(!value))
+                        return;
+                    Execute();
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(PreferEarlyReturnAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task PreservesConditionOperatorComments()
+    {
+        const string source = """
+            class Example
+            {
+                void RunLogical(bool enabled)
+                {
+                    {|#0:if|} (! /* logical */ enabled)
+                    {
+                        Execute();
+                    }
+                }
+
+                void RunEquality(bool enabled, bool other)
+                {
+                    {|#1:if|} (enabled == /* equality */ other)
+                    {
+                        Execute();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void RunLogical(bool enabled)
+                {
+                    if (!(! /* logical */ enabled))
+                        return;
+                    Execute();
+                }
+
+                void RunEquality(bool enabled, bool other)
+                {
+                    if (enabled != /* equality */ other)
+                        return;
+                    Execute();
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(PreferEarlyReturnAnalyzer.DiagnosticId).WithLocation(0),
+            VerifyCS.Diagnostic(PreferEarlyReturnAnalyzer.DiagnosticId).WithLocation(1),
+        };
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
 
 }

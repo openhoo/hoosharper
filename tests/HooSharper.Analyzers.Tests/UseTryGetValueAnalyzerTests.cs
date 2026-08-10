@@ -1,3 +1,7 @@
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Testing;
+using Microsoft.CodeAnalysis.Testing;
 using HooSharper.CodeFixes;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
     HooSharper.Analyzers.UseTryGetValueAnalyzer,
@@ -543,6 +547,273 @@ public sealed class UseTryGetValueAnalyzerTests
                     }
 
                     throw new System.Exception();
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+    [Fact]
+    public Task IgnoresCustomComparerWithObservableCallbacks()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            sealed class CallbackComparer : IEqualityComparer<string>
+            {
+                public bool Equals(string? x, string? y) => true;
+                public int GetHashCode(string value) => 0;
+            }
+
+            class Example
+            {
+                private readonly Dictionary<string, int> dictionary =
+                    new Dictionary<string, int>(new CallbackComparer());
+                private const string Key = "key";
+
+                int Run()
+                {
+                    if (dictionary.ContainsKey(Key))
+                    {
+                        return dictionary[Key];
+                    }
+
+                    return 0;
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task IgnoresAliasIndexerWrite()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private readonly Dictionary<string, int> dictionary = new();
+                private const string Key = "key";
+
+                int Run()
+                {
+                    var alias = dictionary;
+                    if (dictionary.ContainsKey(Key))
+                    {
+                        alias[Key] = 1;
+                        return dictionary[Key];
+                    }
+
+                    return 0;
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task IgnoresTupleAssignmentTarget()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private readonly Dictionary<string, int> dictionary = new();
+                private const string Key = "key";
+
+                int Run()
+                {
+                    if (dictionary.ContainsKey(Key))
+                    {
+                        (dictionary[Key], _) = (1, 1);
+                        return dictionary[Key];
+                    }
+
+                    return 0;
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task IgnoresUserDefinedImplicitConversion()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            struct KeyType
+            {
+                public static implicit operator string(KeyType value) => "key";
+            }
+
+            class Example
+            {
+                private readonly Dictionary<string, int> dictionary = new();
+                private readonly KeyType key = new KeyType();
+
+                int Run()
+                {
+                    if (dictionary.ContainsKey(key))
+                    {
+                        return dictionary[key];
+                    }
+
+                    return 0;
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task IgnoresExplicitCSharp6()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private readonly Dictionary<string, int> dictionary =
+                    new Dictionary<string, int>();
+                private const string Key = "key";
+
+                int Run()
+                {
+                    if (dictionary.ContainsKey(Key))
+                    {
+                        return dictionary[Key];
+                    }
+
+                    return 0;
+                }
+            }
+            """;
+        var test = new CSharpCodeFixTest<
+            UseTryGetValueAnalyzer,
+            UseTryGetValueCodeFixProvider,
+            DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+        };
+        test.SolutionTransforms.Add((solution, projectId) =>
+            solution.WithProjectParseOptions(
+                projectId,
+                ((CSharpParseOptions)solution.GetProject(projectId)!.ParseOptions!)
+                    .WithLanguageVersion(LanguageVersion.CSharp6)));
+
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public Task AcceptsDefaultLanguageVersion()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private readonly Dictionary<string, int> dictionary =
+                    new Dictionary<string, int>();
+                private const string Key = "key";
+
+                int Run()
+                {
+                    if (dictionary.{|#0:ContainsKey|}(Key))
+                    {
+                        return dictionary[Key];
+                    }
+
+                    return 0;
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private readonly Dictionary<string, int> dictionary =
+                    new Dictionary<string, int>();
+                private const string Key = "key";
+
+                int Run()
+                {
+                    if (dictionary.TryGetValue(Key, out var value))
+                    {
+                        return value;
+                    }
+
+                    return 0;
+                }
+            }
+            """;
+        var test = new CSharpCodeFixTest<
+            UseTryGetValueAnalyzer,
+            UseTryGetValueCodeFixProvider,
+            DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+            FixedCode = fixedSource,
+        };
+        test.ExpectedDiagnostics.Add(
+            new DiagnosticResult(UseTryGetValueAnalyzer.DiagnosticId, DiagnosticSeverity.Info)
+                .WithLocation(0));
+        test.SolutionTransforms.Add((solution, projectId) =>
+            solution.WithProjectParseOptions(
+                projectId,
+                ((CSharpParseOptions)solution.GetProject(projectId)!.ParseOptions!)
+                    .WithLanguageVersion(LanguageVersion.Default)));
+
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
+
+
+    [Fact]
+    public Task IgnoresDefaultComparerForUserDefinedKey()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            struct KeyType
+            {
+                private static int Calls;
+
+                public override bool Equals(object? obj)
+                {
+                    Calls++;
+                    return true;
+                }
+
+                public override int GetHashCode()
+                {
+                    Calls++;
+                    return 0;
+                }
+            }
+
+            class Example
+            {
+                private readonly Dictionary<KeyType, int> dictionary =
+                    new Dictionary<KeyType, int>();
+                private readonly KeyType key = new KeyType();
+
+                int Run()
+                {
+                    if (dictionary.ContainsKey(key))
+                    {
+                        return dictionary[key];
+                    }
+
+                    return 0;
                 }
             }
             """;

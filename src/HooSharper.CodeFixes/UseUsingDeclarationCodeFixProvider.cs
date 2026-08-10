@@ -57,9 +57,10 @@ public sealed class UseUsingDeclarationCodeFixProvider : CodeFixProvider
             return document;
         }
 
-        var endOfLine = SyntaxFactory.EndOfLine(DetectEndOfLine(sourceText));
-
+        var endOfLineText = DetectEndOfLine(sourceText);
+        var endOfLine = SyntaxFactory.EndOfLine(endOfLineText);
         var declarationLeadingTrivia = usingStatement.GetLeadingTrivia()
+            .AddRange(CommentLines(usingStatement.AwaitKeyword.TrailingTrivia, endOfLine))
             .AddRange(CommentLines(usingStatement.UsingKeyword.TrailingTrivia, endOfLine))
             .AddRange(CommentLines(usingStatement.OpenParenToken.LeadingTrivia, endOfLine))
             .AddRange(CommentLines(usingStatement.OpenParenToken.TrailingTrivia, endOfLine));
@@ -71,49 +72,80 @@ public sealed class UseUsingDeclarationCodeFixProvider : CodeFixProvider
             .WithAwaitKeyword(usingStatement.AwaitKeyword.WithoutTrivia())
             .WithUsingKeyword(usingStatement.UsingKeyword.WithoutTrivia())
             .WithLeadingTrivia(declarationLeadingTrivia)
-            .WithTrailingTrivia(declarationTrailingTrivia)
-            .WithAdditionalAnnotations(Formatter.Annotation);
+            .WithTrailingTrivia(declarationTrailingTrivia);
 
         var movedStatements = body.Statements.ToList();
         var firstStatement = movedStatements[0];
         var firstLeadingTrivia = CommentLines(body.OpenBraceToken.LeadingTrivia, endOfLine, addInitialLineBreak: true)
             .AddRange(CommentLines(body.OpenBraceToken.TrailingTrivia, endOfLine, addInitialLineBreak: true))
             .AddRange(firstStatement.GetLeadingTrivia());
-        movedStatements[0] = firstStatement
-            .WithLeadingTrivia(firstLeadingTrivia)
-            .WithAdditionalAnnotations(Formatter.Annotation);
+        movedStatements[0] = firstStatement.WithLeadingTrivia(firstLeadingTrivia);
 
         var lastIndex = movedStatements.Count - 1;
         var lastStatement = movedStatements[lastIndex];
         var lastTrailingTrivia = lastStatement.GetTrailingTrivia()
             .AddRange(CommentLines(body.CloseBraceToken.LeadingTrivia, endOfLine, addInitialLineBreak: true))
             .AddRange(CommentLines(usingStatement.GetTrailingTrivia(), endOfLine, addInitialLineBreak: true));
-        movedStatements[lastIndex] = lastStatement
-            .WithTrailingTrivia(lastTrailingTrivia)
-            .WithAdditionalAnnotations(Formatter.Annotation);
+        movedStatements[lastIndex] = lastStatement.WithTrailingTrivia(lastTrailingTrivia);
 
+        var replacementAnnotation = new SyntaxAnnotation();
         var replacements = new List<StatementSyntax>(movedStatements.Count + 1) { usingDeclaration };
         replacements.AddRange(movedStatements);
+        for (var replacementIndex = 0; replacementIndex < replacements.Count; replacementIndex++)
+        {
+            replacements[replacementIndex] = replacements[replacementIndex]
+                .WithAdditionalAnnotations(Formatter.Annotation, replacementAnnotation);
+        }
+
         var index = parentBlock.Statements.IndexOf(usingStatement);
         var replacementBlock = parentBlock.WithStatements(
-                parentBlock.Statements.RemoveAt(index).InsertRange(index, replacements))
-            .WithAdditionalAnnotations(Formatter.Annotation);
-
+            parentBlock.Statements.RemoveAt(index).InsertRange(index, replacements));
         var changedDocument = document.WithSyntaxRoot(root.ReplaceNode(parentBlock, replacementBlock));
-        var formattedDocument = await Formatter.FormatAsync(changedDocument, Formatter.Annotation, cancellationToken: cancellationToken)
+        var formattedDocument = await Formatter.FormatAsync(
+                changedDocument,
+                Formatter.Annotation,
+                cancellationToken: cancellationToken)
             .ConfigureAwait(false);
+        var formattedRoot = await formattedDocument.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        if (formattedRoot is null)
+        {
+            return formattedDocument;
+        }
+
         var formattedText = await formattedDocument.GetTextAsync(cancellationToken).ConfigureAwait(false);
-        var normalizedText = formattedText.ToString()
-            .Replace("\r\n", "\n")
-            .Replace("\r", "\n")
-            .Replace("\n", endOfLine.ToString());
-        return formattedDocument.WithText(Microsoft.CodeAnalysis.Text.SourceText.From(
-            normalizedText,
-            formattedText.Encoding,
-            formattedText.ChecksumAlgorithm));
+        var changes = new List<Microsoft.CodeAnalysis.Text.TextChange>();
+        for (var position = 0; position < formattedText.Length; position++)
+        {
+            var lineBreakLength = formattedText[position] switch
+            {
+                '\r' when position + 1 < formattedText.Length && formattedText[position + 1] == '\n' => 2,
+                '\r' or '\n' => 1,
+                _ => 0,
+            };
+            if (lineBreakLength == 0)
+            {
+                continue;
+            }
+
+            var token = formattedRoot.FindToken(position, findInsideTrivia: true);
+            var trivia = formattedRoot.FindTrivia(position, findInsideTrivia: true);
+            if (token.Span.Contains(position) ||
+                trivia.IsKind(SyntaxKind.DisabledTextTrivia) ||
+                trivia.IsDirective ||
+                formattedText.ToString(new Microsoft.CodeAnalysis.Text.TextSpan(position, lineBreakLength)) == endOfLineText)
+            {
+                position += lineBreakLength - 1;
+                continue;
+            }
+
+            changes.Add(new Microsoft.CodeAnalysis.Text.TextChange(
+                new Microsoft.CodeAnalysis.Text.TextSpan(position, lineBreakLength),
+                endOfLineText));
+            position += lineBreakLength - 1;
+        }
+
+        return formattedDocument.WithText(formattedText.WithChanges(changes));
     }
-
-
     private static string DetectEndOfLine(Microsoft.CodeAnalysis.Text.SourceText sourceText)
     {
         for (var position = 0; position < sourceText.Length; position++)

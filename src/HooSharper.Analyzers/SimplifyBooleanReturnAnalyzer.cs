@@ -1,8 +1,10 @@
 using System.Collections.Immutable;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace HooSharper.Analyzers;
 
@@ -50,8 +52,9 @@ public sealed class SimplifyBooleanReturnAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var conditionType = context.SemanticModel.GetTypeInfo(ifStatement.Condition, context.CancellationToken).Type;
-        if (conditionType?.SpecialType != SpecialType.System_Boolean)
+        var conditionOperation = context.SemanticModel.GetOperation(ifStatement.Condition, context.CancellationToken);
+        if (conditionOperation?.Type?.SpecialType != SpecialType.System_Boolean ||
+            ContainsUserDefinedNot(conditionOperation))
         {
             return;
         }
@@ -64,6 +67,11 @@ public sealed class SimplifyBooleanReturnAnalyzer : DiagnosticAnalyzer
 
         context.ReportDiagnostic(Diagnostic.Create(Rule, ifStatement.IfKeyword.GetLocation()));
     }
+
+    private static bool ContainsUserDefinedNot(IOperation? operation) =>
+        operation is not null &&
+        operation.DescendantsAndSelf().OfType<IUnaryOperation>().Any(unary =>
+            unary.OperatorKind == UnaryOperatorKind.Not && unary.OperatorMethod is not null);
 
     internal static bool TryGetReturnedLiteral(StatementSyntax statement, out bool value)
     {

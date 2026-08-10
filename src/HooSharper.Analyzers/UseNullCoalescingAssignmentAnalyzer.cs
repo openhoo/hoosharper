@@ -32,7 +32,9 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
 
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
     {
-        if (context.Node.SyntaxTree.Options is not CSharpParseOptions { LanguageVersion: >= LanguageVersion.CSharp8 })
+        if (context.Node.SyntaxTree.Options is not CSharpParseOptions parseOptions ||
+            (parseOptions.LanguageVersion != LanguageVersion.Default &&
+             parseOptions.LanguageVersion < LanguageVersion.CSharp8))
         {
             return;
         }
@@ -124,7 +126,7 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
         }
 
         operation = semanticModel.GetOperation(expression, cancellationToken)!;
-        return operation is not null && IsSupportedTargetOperation(operation);
+        return operation is { Type.TypeKind: not TypeKind.Dynamic } && IsSupportedTargetOperation(operation);
     }
 
     private static bool IsSupportedTargetOperation(IOperation? operation)
@@ -134,13 +136,12 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
         {
             ILocalReferenceOperation => true,
             IParameterReferenceOperation => true,
-            IFieldReferenceOperation field => IsSideEffectFreeReceiver(field.Instance),
-            IPropertyReferenceOperation property => IsSideEffectFreeReceiver(property.Instance),
+            IFieldReferenceOperation field => IsStableReceiver(field.Instance),
             _ => false,
         };
     }
 
-    private static bool IsSideEffectFreeReceiver(IOperation? operation)
+    private static bool IsStableReceiver(IOperation? operation)
     {
         operation = Unwrap(operation);
         return operation switch
@@ -149,7 +150,10 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
             IInstanceReferenceOperation => true,
             ILocalReferenceOperation => true,
             IParameterReferenceOperation => true,
-            IFieldReferenceOperation field => IsSideEffectFreeReceiver(field.Instance),
+            IFieldReferenceOperation field =>
+                field.Field.IsReadOnly &&
+                !field.Field.IsVolatile &&
+                IsStableReceiver(field.Instance),
             _ => false,
         };
     }
@@ -224,4 +228,5 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
 
         return false;
     }
+
 }

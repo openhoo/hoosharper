@@ -47,7 +47,8 @@ public sealed class RemoveRedundantElseCodeFixProvider : CodeFixProvider
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-        if (root is null || ifStatement.Else is not { } elseClause)
+        if (root is null || ifStatement.Else is not { } elseClause ||
+            HasDirective(elseClause))
         {
             return document;
         }
@@ -170,4 +171,7 @@ public sealed class RemoveRedundantElseCodeFixProvider : CodeFixProvider
 
         return SyntaxFactory.TriviaList(result);
     }
+
+    private static bool HasDirective(SyntaxNode node) =>
+        node.DescendantTrivia(descendIntoTrivia: true).Any(trivia => trivia.IsDirective);
 }

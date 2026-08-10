@@ -13,8 +13,9 @@ public sealed class UseDictionaryTryAddAnalyzerTests
             using System.Collections.Generic;
             class C
             {
-                void M(Dictionary<string, int> dictionary, string key, int value)
+                void M(string key, int value)
                 {
+                    var dictionary = new Dictionary<string, int>();
                     if (!dictionary.{|#0:ContainsKey|}(key))
                     {
                         dictionary.Add(key, value);
@@ -26,8 +27,9 @@ public sealed class UseDictionaryTryAddAnalyzerTests
             using System.Collections.Generic;
             class C
             {
-                void M(Dictionary<string, int> dictionary, string key, int value)
+                void M(string key, int value)
                 {
+                    var dictionary = new Dictionary<string, int>();
                     dictionary.TryAdd(key, value);
                 }
             }
@@ -43,8 +45,9 @@ public sealed class UseDictionaryTryAddAnalyzerTests
             using System.Collections.Generic;
             class C
             {
-                void M(Dictionary<string, int> dictionary, string key, int value)
+                void M(string key, int value)
                 {
+                    var dictionary = new Dictionary<string, int>();
                     if (!dictionary.{|#0:ContainsKey|}(key))
                     {
                         dictionary.Add(key, value);
@@ -59,8 +62,9 @@ public sealed class UseDictionaryTryAddAnalyzerTests
             using System.Collections.Generic;
             class C
             {
-                void M(Dictionary<string, int> dictionary, string key, int value)
+                void M(string key, int value)
                 {
+                    var dictionary = new Dictionary<string, int>();
                     if (dictionary.TryAdd(key, value))
                     {
                         // newly added
@@ -81,8 +85,9 @@ public sealed class UseDictionaryTryAddAnalyzerTests
             using System.Collections.Generic;
             class C
             {
-                void M(Dictionary<string, int> dictionary, string key, int value)
+                void M(string key, int value)
                 {
+                    var dictionary = new Dictionary<string, int>();
                     if (!dictionary.{|#0:ContainsKey|}(key) /* after condition */)
                     { // opening brace
                         // before Add
@@ -96,8 +101,9 @@ public sealed class UseDictionaryTryAddAnalyzerTests
             using System.Collections.Generic;
             class C
             {
-                void M(Dictionary<string, int> dictionary, string key, int value)
+                void M(string key, int value)
                 {
+                    var dictionary = new Dictionary<string, int>();
                     /* after condition */
                     // before Add
                     // before Add
@@ -118,8 +124,9 @@ public sealed class UseDictionaryTryAddAnalyzerTests
             using System.Collections.Generic;
             class C
             {
-                void M(Dictionary<string, int> dictionary, string key, int value)
+                void M(string key, int value)
                 {
+                    var dictionary = new Dictionary<string, int>();
                     if (!/* after not */dictionary.{|#0:ContainsKey|}(key))
                     { // retained opening brace
                         // before Add
@@ -135,8 +142,9 @@ public sealed class UseDictionaryTryAddAnalyzerTests
             using System.Collections.Generic;
             class C
             {
-                void M(Dictionary<string, int> dictionary, string key, int value)
+                void M(string key, int value)
                 {
+                    var dictionary = new Dictionary<string, int>();
                     if ( /* after not */dictionary.TryAdd(key, value))
                     { // retained opening brace
                       // before Add
@@ -160,8 +168,9 @@ public sealed class UseDictionaryTryAddAnalyzerTests
             using System.Collections.Generic;
             class C
             {
-                void M(Dictionary<string, int> dictionary, string first, string second)
+                void M(string first, string second)
                 {
+                    var dictionary = new Dictionary<string, int>();
                     if (!dictionary.{|#0:ContainsKey|}(first))
                     {
                         dictionary.Add(first, 1);
@@ -179,8 +188,9 @@ public sealed class UseDictionaryTryAddAnalyzerTests
             using System.Collections.Generic;
             class C
             {
-                void M(Dictionary<string, int> dictionary, string first, string second)
+                void M(string first, string second)
                 {
+                    var dictionary = new Dictionary<string, int>();
                     dictionary.TryAdd(first, 1);
                     if (dictionary.TryAdd(second, 2))
                     {
@@ -427,12 +437,11 @@ public sealed class UseDictionaryTryAddAnalyzerTests
 
             class C
             {
-                private readonly Dictionary<string, int> _dictionary = new();
-                private readonly int _value = 1;
-
                 void M(string key)
                 {
-                    if (!_dictionary.{|#0:ContainsKey|}(key)) { _dictionary.Add(key, _value); }
+                    var dictionary = new Dictionary<string, int>();
+                    var value = 1;
+                    if (!dictionary.{|#0:ContainsKey|}(key)) { dictionary.Add(key, value); }
                 }
             }
             """;
@@ -441,12 +450,11 @@ public sealed class UseDictionaryTryAddAnalyzerTests
 
             class C
             {
-                private readonly Dictionary<string, int> _dictionary = new();
-                private readonly int _value = 1;
-
                 void M(string key)
                 {
-                    _dictionary.TryAdd(key, _value);
+                    var dictionary = new Dictionary<string, int>();
+                    var value = 1;
+                    dictionary.TryAdd(key, value);
                 }
             }
             """;
@@ -464,14 +472,13 @@ public sealed class UseDictionaryTryAddAnalyzerTests
 
             class C
             {
-                void M(
-                    Dictionary<int, long> numbers,
-                    Dictionary<Type, Type> types,
-                    Dictionary<string, int> values,
-                    string key)
+                void M(string key)
                 {
-                    if (!numbers.{|#0:ContainsKey|}(default)) { numbers.Add(default, 1); }
-                    if (!types.{|#1:ContainsKey|}(typeof(string))) { types.Add(typeof(string), typeof(int)); }
+                    var numbers = new Dictionary<int, long>();
+                    var types = new Dictionary<int, Type>();
+                    var values = new Dictionary<string, int>();
+                    if (!numbers.{|#0:ContainsKey|}(default)) { numbers.Add(default, 1L); }
+                    if (!types.{|#1:ContainsKey|}(default)) { types.Add(default, typeof(int)); }
                     if (!values.{|#2:ContainsKey|}(key)) { values.Add(key, 1); }
                 }
             }
@@ -482,14 +489,13 @@ public sealed class UseDictionaryTryAddAnalyzerTests
 
             class C
             {
-                void M(
-                    Dictionary<int, long> numbers,
-                    Dictionary<Type, Type> types,
-                    Dictionary<string, int> values,
-                    string key)
+                void M(string key)
                 {
-                    numbers.TryAdd(default, 1);
-                    types.TryAdd(typeof(string), typeof(int));
+                    var numbers = new Dictionary<int, long>();
+                    var types = new Dictionary<int, Type>();
+                    var values = new Dictionary<string, int>();
+                    numbers.TryAdd(default, 1L);
+                    types.TryAdd(default, typeof(int));
                     values.TryAdd(key, 1);
                 }
             }
@@ -549,6 +555,93 @@ public sealed class UseDictionaryTryAddAnalyzerTests
                 {
                     if (!first.ContainsKey(key)) { second.Add(key, 1); }
                     if (!first.ContainsKey(key)) { first.Add("other", 1); }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task IgnoresCountingComparerForLiteralAndLocalValue()
+    {
+        const string source = """
+            using System;
+            using System.Collections.Generic;
+
+            sealed class CountingComparer : IEqualityComparer<string>
+            {
+                public int Count;
+                public bool Equals(string? x, string? y) { Count++; return String.Equals(x, y); }
+                public int GetHashCode(string value) { Count++; return value.GetHashCode(); }
+            }
+
+            class C
+            {
+                void M()
+                {
+                    var comparer = new CountingComparer();
+                    var dictionary = new Dictionary<string, int>(comparer);
+                    var value = 1;
+                    if (!dictionary.ContainsKey("key"))
+                    {
+                        dictionary.Add("key", value);
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task IgnoresPotentiallyTypeInitializingStaticFieldValue()
+    {
+        const string source = """
+            using System;
+            using System.Collections.Generic;
+
+            static class ThrowingType
+            {
+                public static readonly int Value = Throw();
+                private static int Throw() => throw new InvalidOperationException();
+            }
+
+            class C
+            {
+                void M()
+                {
+                    var dictionary = new Dictionary<string, int>();
+                    if (!dictionary.ContainsKey("key"))
+                    {
+                        dictionary.Add("key", ThrowingType.Value);
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task IgnoresSideEffectingKeyEvaluation()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            class C
+            {
+                private int _calls;
+
+                string GetKey() => (_calls++).ToString();
+
+                void M()
+                {
+                    var dictionary = new Dictionary<string, int>();
+                    if (!dictionary.ContainsKey(GetKey()))
+                    {
+                        dictionary.Add(GetKey(), 1);
+                    }
                 }
             }
             """;

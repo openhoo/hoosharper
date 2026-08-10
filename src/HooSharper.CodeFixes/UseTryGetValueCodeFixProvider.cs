@@ -50,6 +50,12 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
         var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
         if (root is null || semanticModel is null ||
+            semanticModel.SyntaxTree.Options is CSharpParseOptions
+            {
+                LanguageVersion: var languageVersion,
+            } &&
+            languageVersion != LanguageVersion.Default &&
+            (int)languageVersion < (int)LanguageVersion.CSharp7 ||
             ifStatement.Condition is not InvocationExpressionSyntax
             {
                 Expression: MemberAccessExpressionSyntax memberAccess,
@@ -60,8 +66,14 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
         }
 
         var key = invocation.ArgumentList.Arguments[0].Expression;
-        if (!IsCallbackStable(memberAccess.Expression, semanticModel, cancellationToken) ||
-            !IsCallbackStable(key, semanticModel, cancellationToken))
+        var dictionaryOperation = semanticModel.GetOperation(memberAccess.Expression, cancellationToken);
+        var invocationOperation = semanticModel.GetOperation(invocation, cancellationToken) as IInvocationOperation;
+        var keyOperation = invocationOperation?.Arguments.Length == 1
+            ? invocationOperation.Arguments[0].Value
+            : null;
+        if (!IsCallbackStableOperation(dictionaryOperation) ||
+            !IsCallbackStableOperation(keyOperation) ||
+            !HasProvenDefaultComparer(dictionaryOperation, semanticModel, cancellationToken))
         {
             return document;
         }
@@ -200,6 +212,71 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
         SymbolEqualityComparer.Default.Equals(containingType.OriginalDefinition, dictionaryDefinition) ||
         SymbolEqualityComparer.Default.Equals(containingType.OriginalDefinition, dictionaryInterface);
 
+    private static bool HasProvenDefaultComparer(
+        IOperation? operation,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken)
+    {
+        operation = Unwrap(operation);
+        if (operation?.Type is not INamedTypeSymbol dictionaryType ||
+            dictionaryType.TypeArguments.Length != 2 ||
+            !IsProvablyPureEqualityType(dictionaryType.TypeArguments[0]) ||
+            operation is not IFieldReferenceOperation field ||
+            !field.Field.IsReadOnly ||
+            field.Field.IsVolatile)
+        {
+            return false;
+        }
+
+        foreach (var syntaxReference in field.Field.DeclaringSyntaxReferences)
+        {
+            if (syntaxReference.GetSyntax(cancellationToken) is VariableDeclaratorSyntax
+                {
+                    Initializer.Value: var initializer,
+                } &&
+                semanticModel.GetOperation(initializer, cancellationToken) is IObjectCreationOperation
+                {
+                    Arguments.Length: 0,
+                })
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsProvablyPureEqualityType(ITypeSymbol type)
+    {
+        if (type.TypeKind == TypeKind.Enum)
+        {
+            return true;
+        }
+
+        if (type is INamedTypeSymbol namedType &&
+            namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
+            namedType.TypeArguments.Length == 1)
+        {
+            return IsProvablyPureEqualityType(namedType.TypeArguments[0]);
+        }
+
+        return type.SpecialType is
+            SpecialType.System_Boolean or
+            SpecialType.System_Byte or
+            SpecialType.System_SByte or
+            SpecialType.System_Int16 or
+            SpecialType.System_UInt16 or
+            SpecialType.System_Int32 or
+            SpecialType.System_UInt32 or
+            SpecialType.System_Int64 or
+            SpecialType.System_UInt64 or
+            SpecialType.System_Char or
+            SpecialType.System_Single or
+            SpecialType.System_Double or
+            SpecialType.System_Decimal or
+            SpecialType.System_String;
+    }
+
     private static bool IsCallbackStable(
         ExpressionSyntax expression,
         SemanticModel semanticModel,
@@ -248,6 +325,12 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
 
         for (SyntaxNode? node = elementAccess.Parent; node is not null; node = node.Parent)
         {
+            if (node is AssignmentExpressionSyntax assignment &&
+                assignment.Left.Span.Contains(elementAccess.Span))
+            {
+                return false;
+            }
+
             if (node is RefExpressionSyntax)
             {
                 return false;
@@ -273,12 +356,17 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
         {
             operation = operation switch
             {
-                IConversionOperation { IsImplicit: true } conversion => conversion.Operand,
+                IConversionOperation
+                {
+                    IsImplicit: true,
+                    OperatorMethod: null,
+                } conversion => conversion.Operand,
                 IParenthesizedOperation parenthesized => parenthesized.Operand,
                 _ => operation,
             };
 
-            if (operation is not IConversionOperation { IsImplicit: true } and not IParenthesizedOperation)
+            if (operation is not IConversionOperation { IsImplicit: true, OperatorMethod: null } and
+                not IParenthesizedOperation)
             {
                 return operation;
             }
@@ -293,7 +381,8 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
         foreach (var node in statement.DescendantNodes(ShouldDescendInto))
         {
             if (node is AssignmentExpressionSyntax assignment &&
-                (IsSameExpression(assignment.Left, dictionary) ||
+                (assignment.Left is ElementAccessExpressionSyntax ||
+                 IsSameExpression(assignment.Left, dictionary) ||
                  IsSameExpression(assignment.Left, key) ||
                  IsDictionaryIndexer(assignment.Left, dictionary)))
             {
@@ -311,7 +400,8 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
                 _ => null,
             };
             if (mutatedOperand is not null &&
-                (IsSameExpression(mutatedOperand, dictionary) ||
+                (mutatedOperand is ElementAccessExpressionSyntax ||
+                 IsSameExpression(mutatedOperand, dictionary) ||
                  IsSameExpression(mutatedOperand, key) ||
                  IsDictionaryIndexer(mutatedOperand, dictionary)))
             {

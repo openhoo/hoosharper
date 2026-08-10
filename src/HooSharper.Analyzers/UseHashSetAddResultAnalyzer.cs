@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -31,20 +32,23 @@ public sealed class UseHashSetAddResultAnalyzer : DiagnosticAnalyzer
         {
             var hashSetDefinition = compilationContext.Compilation.GetTypeByMetadataName(
                 "System.Collections.Generic.HashSet`1");
-            if (hashSetDefinition is null)
+            var equalityComparerDefinition = compilationContext.Compilation.GetTypeByMetadataName(
+                "System.Collections.Generic.IEqualityComparer`1");
+            if (hashSetDefinition is null || equalityComparerDefinition is null)
             {
                 return;
             }
 
             compilationContext.RegisterSyntaxNodeAction(
-                nodeContext => AnalyzeIfStatement(nodeContext, hashSetDefinition),
+                nodeContext => AnalyzeIfStatement(nodeContext, hashSetDefinition, equalityComparerDefinition),
                 SyntaxKind.IfStatement);
         });
     }
 
     private static void AnalyzeIfStatement(
         SyntaxNodeAnalysisContext context,
-        INamedTypeSymbol hashSetDefinition)
+        INamedTypeSymbol hashSetDefinition,
+        INamedTypeSymbol equalityComparerDefinition)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
         if (ifStatement.Else is not null ||
@@ -84,8 +88,15 @@ public sealed class UseHashSetAddResultAnalyzer : DiagnosticAnalyzer
 
         var receiverOperation = containsOperation!.Instance;
         var valueOperation = containsOperation.Arguments[0].Value;
-        if (!IsCallbackStableOperation(receiverOperation) ||
+        if (!HasProvablyPureComparer(
+                receiverOperation,
+                ifStatement,
+                context.SemanticModel,
+                hashSetDefinition,
+                equalityComparerDefinition) ||
+            !IsCallbackStableOperation(receiverOperation) ||
             !IsCallbackStableOperation(valueOperation) ||
+
             receiverOperation?.Type is not INamedTypeSymbol namedReceiver ||
             !SymbolEqualityComparer.Default.Equals(namedReceiver.OriginalDefinition, hashSetDefinition))
         {
@@ -93,6 +104,196 @@ public sealed class UseHashSetAddResultAnalyzer : DiagnosticAnalyzer
         }
 
         context.ReportDiagnostic(Diagnostic.Create(Rule, containsMember.Name.GetLocation()));
+    }
+    private static bool HasProvablyPureComparer(
+        IOperation? receiver,
+        IfStatementSyntax ifStatement,
+        SemanticModel semanticModel,
+        INamedTypeSymbol hashSetDefinition,
+        INamedTypeSymbol equalityComparerDefinition)
+    {
+        receiver = Unwrap(receiver);
+        if (receiver?.Type is not INamedTypeSymbol hashSetType ||
+            hashSetType.TypeArguments.Length != 1 ||
+            !IsProvablyPureEqualityType(hashSetType.TypeArguments[0]))
+        {
+            return false;
+        }
+
+        return receiver switch
+        {
+            ILocalReferenceOperation localReference =>
+                IsNeverReassigned(localReference.Local, ifStatement, semanticModel) &&
+                HasDefaultComparerInitializer(
+                    localReference.Local,
+                    semanticModel,
+                    hashSetDefinition,
+                    equalityComparerDefinition),
+            IFieldReferenceOperation fieldReference when fieldReference.Field.IsReadOnly &&
+                !fieldReference.Field.IsVolatile =>
+                IsNeverReassigned(fieldReference.Field, semanticModel) &&
+                HasDefaultComparerInitializer(
+                    fieldReference.Field,
+                    semanticModel,
+                    hashSetDefinition,
+                    equalityComparerDefinition),
+            _ => false,
+        };
+    }
+
+    private static bool HasDefaultComparerInitializer(
+        ISymbol symbol,
+        SemanticModel semanticModel,
+        INamedTypeSymbol collectionDefinition,
+        INamedTypeSymbol equalityComparerDefinition)
+    {
+        if (symbol.DeclaringSyntaxReferences.Length != 1 ||
+            symbol.DeclaringSyntaxReferences[0].GetSyntax() is not VariableDeclaratorSyntax
+            {
+                Initializer.Value: var initializer,
+            })
+        {
+            return false;
+        }
+
+        if (initializer.SyntaxTree != semanticModel.SyntaxTree ||
+            semanticModel.GetOperation(initializer) is not IObjectCreationOperation creation ||
+            creation.Type is not INamedTypeSymbol createdType ||
+            !SymbolEqualityComparer.Default.Equals(createdType.OriginalDefinition, collectionDefinition))
+        {
+            return false;
+        }
+
+        foreach (var argument in creation.Arguments)
+        {
+            if (argument.Parameter?.Type is INamedTypeSymbol parameterType &&
+                SymbolEqualityComparer.Default.Equals(
+                    parameterType.OriginalDefinition,
+                    equalityComparerDefinition) &&
+                !(argument.Value.ConstantValue is { HasValue: true, Value: null }))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsNeverReassigned(
+        ILocalSymbol local,
+        IfStatementSyntax ifStatement,
+        SemanticModel semanticModel)
+    {
+        var scope = ifStatement.FirstAncestorOrSelf<MemberDeclarationSyntax>();
+        if (scope is null)
+        {
+            return false;
+        }
+
+        foreach (var identifier in scope.DescendantNodes().OfType<IdentifierNameSyntax>())
+        {
+            if (SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(identifier).Symbol,
+                    local) &&
+                IsWrittenReference(identifier))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsNeverReassigned(IFieldSymbol field, SemanticModel semanticModel)
+    {
+        if (field.ContainingType.DeclaringSyntaxReferences.Length != 1 ||
+            field.ContainingType.DeclaringSyntaxReferences[0].GetSyntax() is not TypeDeclarationSyntax typeDeclaration ||
+            typeDeclaration.SyntaxTree != semanticModel.SyntaxTree)
+        {
+            return false;
+        }
+
+        foreach (var identifier in typeDeclaration.DescendantNodes().OfType<IdentifierNameSyntax>())
+        {
+            if (SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(identifier).Symbol,
+                    field) &&
+                IsWrittenReference(identifier))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsWrittenReference(IdentifierNameSyntax identifier)
+    {
+        for (SyntaxNode? node = identifier; node?.Parent is { } parent; node = parent)
+        {
+            if (parent is AssignmentExpressionSyntax assignment)
+            {
+                return assignment.Left.Span.Contains(identifier.Span);
+            }
+
+            if (parent is PrefixUnaryExpressionSyntax
+                {
+                    RawKind: (int)SyntaxKind.PreIncrementExpression or
+                        (int)SyntaxKind.PreDecrementExpression,
+                } ||
+                parent is PostfixUnaryExpressionSyntax
+                {
+                    RawKind: (int)SyntaxKind.PostIncrementExpression or
+                        (int)SyntaxKind.PostDecrementExpression,
+                } ||
+                parent is ArgumentSyntax
+                {
+                    RefKindKeyword.RawKind: (int)SyntaxKind.RefKeyword or
+                        (int)SyntaxKind.OutKeyword,
+                } ||
+                parent is RefExpressionSyntax)
+            {
+                return true;
+            }
+
+            if (parent is StatementSyntax or MemberDeclarationSyntax)
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsProvablyPureEqualityType(ITypeSymbol type)
+    {
+        if (type.TypeKind == TypeKind.Enum)
+        {
+            return true;
+        }
+
+        if (type is INamedTypeSymbol namedType &&
+            namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
+            namedType.TypeArguments.Length == 1)
+        {
+            return IsProvablyPureEqualityType(namedType.TypeArguments[0]);
+        }
+
+        return type.SpecialType is
+            SpecialType.System_Boolean or
+            SpecialType.System_Byte or
+            SpecialType.System_SByte or
+            SpecialType.System_Int16 or
+            SpecialType.System_UInt16 or
+            SpecialType.System_Int32 or
+            SpecialType.System_UInt32 or
+            SpecialType.System_Int64 or
+            SpecialType.System_UInt64 or
+            SpecialType.System_Char or
+            SpecialType.System_Single or
+            SpecialType.System_Double or
+            SpecialType.System_Decimal or
+            SpecialType.System_String;
     }
 
     private static bool TryGetNegatedContains(
@@ -139,6 +340,7 @@ public sealed class UseHashSetAddResultAnalyzer : DiagnosticAnalyzer
         operation = Unwrap(operation);
         return operation switch
         {
+            ILocalReferenceOperation => true,
             ILiteralOperation => true,
             IDefaultValueOperation => true,
             ITypeOfOperation => true,

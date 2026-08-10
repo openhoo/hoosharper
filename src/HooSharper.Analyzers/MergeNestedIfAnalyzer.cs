@@ -72,7 +72,7 @@ public sealed class MergeNestedIfAnalyzer : DiagnosticAnalyzer
         }
 
         var outerIndex = containingBlock.Statements.IndexOf(outerIf);
-        if (outerIndex < 0 || outerIndex == containingBlock.Statements.Count - 1)
+        if (outerIndex < 0)
         {
             return false;
         }
@@ -97,8 +97,13 @@ public sealed class MergeNestedIfAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        for (var statementIndex = outerIndex + 1; statementIndex < containingBlock.Statements.Count; statementIndex++)
+        for (var statementIndex = 0; statementIndex < containingBlock.Statements.Count; statementIndex++)
         {
+            if (statementIndex == outerIndex)
+            {
+                continue;
+            }
+
             foreach (var node in containingBlock.Statements[statementIndex].DescendantNodesAndSelf())
             {
                 var name = node switch

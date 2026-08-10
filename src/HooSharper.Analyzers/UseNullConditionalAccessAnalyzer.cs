@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -42,7 +43,9 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
         INamedTypeSymbol? expressionType)
     {
         var conditional = (ConditionalExpressionSyntax)context.Node;
-        if (context.Node.SyntaxTree.Options is not CSharpParseOptions { LanguageVersion: >= LanguageVersion.CSharp6 } ||
+        if (context.Node.SyntaxTree.Options is not CSharpParseOptions parseOptions ||
+            (parseOptions.LanguageVersion != LanguageVersion.Default &&
+             parseOptions.LanguageVersion < LanguageVersion.CSharp6) ||
             HasDirective(conditional) ||
             !HasCandidateShape(conditional) ||
             IsWithinExpressionTree(conditional, context.SemanticModel, expressionType, context.CancellationToken) ||
@@ -53,7 +56,9 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
         }
 
         var receiverOperation = Unwrap(context.SemanticModel.GetOperation(receiver, context.CancellationToken));
-        if (!IsStableReceiver(receiverOperation) || receiverOperation?.Type is null or { TypeKind: TypeKind.Dynamic })
+        if (HasUnpreservedComment(conditional, access) ||
+            !IsStableReceiver(receiverOperation) ||
+            receiverOperation?.Type is null or { TypeKind: TypeKind.Dynamic })
         {
             return;
         }
@@ -309,6 +314,14 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
 
         return operation;
     }
+
+    private static bool HasUnpreservedComment(
+        ConditionalExpressionSyntax conditional,
+        ExpressionSyntax access) =>
+        conditional.DescendantTrivia(descendIntoTrivia: true).Any(trivia =>
+            (trivia.IsKind(SyntaxKind.SingleLineCommentTrivia) ||
+             trivia.IsKind(SyntaxKind.MultiLineCommentTrivia)) &&
+            !access.FullSpan.Contains(trivia.Span));
 
     private static bool IsWithinExpressionTree(
         SyntaxNode node,

@@ -498,4 +498,27 @@ public sealed class MergeNestedIfAnalyzerTests
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
     }
 
+    [Fact]
+    public Task DoesNotReportWhenConditionVariableWouldCollideWithEarlierDeclaration()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(object value, bool enabled)
+                {
+                    { string text = "earlier"; Use(text); }
+
+                    if (enabled)
+                    {
+                        if (value is string text)
+                            Use(text);
+                    }
+                }
+
+                void Use(object value) { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
 }

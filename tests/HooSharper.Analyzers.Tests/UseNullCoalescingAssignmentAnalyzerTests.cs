@@ -49,7 +49,7 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
     }
 
     [Fact]
-    public Task ReplacesStableMemberEqualsNullCheck()
+    public Task IgnoresPropertyTargets()
     {
         const string source = """
             class Holder
@@ -63,32 +63,15 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
 
                 void Set(string fallback)
                 {
-                    if (holder.Value {|#0:==|} null)
+                    if (holder.Value == null)
                     {
                         holder.Value = fallback;
                     }
                 }
             }
             """;
-        const string fixedSource = """
-            class Holder
-            {
-                public string? Value { get; set; }
-            }
 
-            class Example
-            {
-                private readonly Holder holder = new();
-
-                void Set(string fallback)
-                {
-                    holder.Value ??= fallback;
-                }
-            }
-            """;
-
-        var expected = VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(0);
-        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+        return VerifyCS.VerifyAnalyzerAsync(source);
     }
 
     [Fact]
@@ -217,7 +200,7 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
     }
 
     [Fact]
-    public Task ReplacesStaticAndStableReceiverTargets()
+    public Task ReplacesStaticFieldAndIgnoresPropertyTargets()
     {
         const string source = """
             class Holder
@@ -231,18 +214,12 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
 
                 void Set(Holder parameter, string fallback)
                 {
-                    Holder local = parameter;
                     if (shared {|#0:is|} null)
                     {
                         shared = fallback;
                     }
 
-                    if ((local).Value {|#1:is|} null)
-                    {
-                        (local).Value = fallback;
-                    }
-
-                    if (parameter.Value {|#2:is|} null)
+                    if (parameter.Value is null)
                     {
                         parameter.Value = fallback;
                     }
@@ -261,24 +238,96 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
 
                 void Set(Holder parameter, string fallback)
                 {
-                    Holder local = parameter;
                     shared ??= fallback;
 
-                    (local).Value ??= fallback;
-
-                    parameter.Value ??= fallback;
+                    if (parameter.Value is null)
+                    {
+                        parameter.Value = fallback;
+                    }
                 }
             }
             """;
 
-        var expected = new[]
-        {
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
             VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(0),
-            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(1),
-            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(2),
-        };
+            fixedSource);
+    }
 
-        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    [Fact]
+    public Task IgnoresDynamicEqualityAndRefReturnTargets()
+    {
+        const string source = """
+            class Holder
+            {
+                private string? value;
+                public ref string? Value => ref value;
+            }
+
+            class Example
+            {
+                void Set(dynamic value, dynamic fallback, Holder holder)
+                {
+                    if (value == null)
+                    {
+                        value = fallback;
+                    }
+
+                    if (holder.Value is null)
+                    {
+                        holder.Value = "fallback";
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task AcceptsDefaultLanguageVersion()
+    {
+        const string source = """
+            class Example
+            {
+                void Set(string? value, string fallback)
+                {
+                    if (value {|#0:is|} null)
+                    {
+                        value = fallback;
+                    }
+                }
+            }
+            """;
+
+        var test = new CSharpCodeFixTest<
+            UseNullCoalescingAssignmentAnalyzer,
+            UseNullCoalescingAssignmentCodeFixProvider,
+            DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+            FixedCode = """
+                class Example
+                {
+                    void Set(string? value, string fallback)
+                    {
+                        value ??= fallback;
+                    }
+                }
+                """,
+        };
+        test.ExpectedDiagnostics.Add(
+            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(0));
+        test.SolutionTransforms.Add((solution, projectId) =>
+        {
+            var project = solution.GetProject(projectId)!;
+            return solution.WithProjectParseOptions(
+                projectId,
+                ((CSharpParseOptions)project.ParseOptions!).WithLanguageVersion(LanguageVersion.Default));
+        });
+
+        return test.RunAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]

@@ -7,13 +7,13 @@
 
 HooSharper is an open-source collection of Roslyn analyzers and code fixes for opinionated C# code style. It brings focused, conservative inspections and quick fixes to the standard .NET compiler and IDE analyzer infrastructure.
 
-The package currently ships nine rules covering guard clauses, compact conditionals, redundant control flow, type patterns, boolean expressions, dictionary lookups, null-coalescing assignment, and argument validation.
+The package currently ships 20 rules covering guard clauses, compact conditionals, redundant control flow, type patterns, boolean expressions, collection lookups, null handling, argument validation, using declarations, string presence tests, and fluent-chain formatting.
 
 ## Requirements
 
 - A C# project using an SDK-style project file
 - A Roslyn-capable editor or build environment, such as Visual Studio, Rider, VS Code with C# tooling, or `dotnet build`
-- This repository itself builds with .NET SDK 10.0.110 or a compatible .NET 10 patch
+- This repository requests .NET SDK 10.0.109 in `global.json` and allows `rollForward: latestPatch` within the .NET 10.0.1xx feature band
 
 The analyzer package targets `netstandard2.0` so it can run in a broad range of Roslyn hosts. Projects consuming the analyzer do not need to target .NET 10.
 
@@ -405,7 +405,7 @@ dotnet build HooSharper.slnx
 dotnet test HooSharper.slnx
 ```
 
-`bun install` activates the Husky `commit-msg` hook. Every local commit is checked by Commitlint using `@commitlint/config-conventional`; CI validates the complete pull-request or push commit range again. Run it manually with:
+`bun install` activates the Husky `commit-msg` hook. Every local commit is checked by Commitlint using `@commitlint/config-conventional`; CI runs Commitlint and Hooversion over the complete pull-request or pushed commit range. Workflow dispatches validate the checked-out commit. Run Commitlint manually with:
 
 ```bash
 echo "feat(analyzers): add a rule" | bunx --no-install commitlint
@@ -530,16 +530,16 @@ The analyzer assembly is loaded by the compiler and IDE. The code-fix assembly i
 Inspect a locally produced package with:
 
 ```bash
-unzip -l artifacts/HooSharper.Analyzers.0.2.1.nupkg
+unzip -l artifacts/HooSharper.Analyzers.*.nupkg
 ```
 
 ### Continuous releases
 
 CI follows the shared OpenHoo release model:
 
-1. `.github/workflows/ci.yml` runs on pull requests and pushes to `main`.
-2. Hooversion validates every commit against the Conventional Commits format.
-3. The solution is restored, built, tested, and packed with the SDK pinned in `global.json`.
+1. `.github/workflows/ci.yml` runs on pull requests, pushes to `main`, and manual dispatches.
+2. Commitlint and Hooversion validate every commit in the complete pull-request or pushed commit range; manual dispatches validate the checked-out commit.
+3. The analyzer test project and its dependencies are restored and built with the SDK policy in `global.json`, its tests run with a line-coverage gate, and the analyzer package is packed.
 4. A successful non-release push to `main` triggers `.github/workflows/release.yml`.
 5. Hooversion calculates the next semantic version, updates `version` and `CHANGELOG.md`, creates a `chore(release):` commit and `v<version>` tag, pushes both, and creates the GitHub Release.
 6. The tagged source is rebuilt and published to GitHub Packages.

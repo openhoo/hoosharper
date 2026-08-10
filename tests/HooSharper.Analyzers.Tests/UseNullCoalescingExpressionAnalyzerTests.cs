@@ -1,3 +1,7 @@
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Testing;
+using Microsoft.CodeAnalysis.Testing;
 using HooSharper.CodeFixes;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
     HooSharper.Analyzers.UseNullCoalescingExpressionAnalyzer,
@@ -448,5 +452,77 @@ public sealed class UseNullCoalescingExpressionAnalyzerTests
             VerifyCS.Diagnostic(UseNullCoalescingExpressionAnalyzer.DiagnosticId).WithLocation(1),
         };
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
+    [Fact]
+    public Task DoesNotReportBeforeCSharp2()
+    {
+        const string source = """
+            class Example
+            {
+                string Get(string value, string fallback)
+                {
+                    return value == null ? fallback : value;
+                }
+            }
+            """;
+
+        var test = new CSharpCodeFixTest<
+            UseNullCoalescingExpressionAnalyzer,
+            UseNullCoalescingExpressionCodeFixProvider,
+            DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+        };
+        test.SolutionTransforms.Add((solution, projectId) =>
+        {
+            var project = solution.GetProject(projectId)!;
+            return solution.WithProjectParseOptions(
+                projectId,
+                ((CSharpParseOptions)project.ParseOptions!).WithLanguageVersion(LanguageVersion.CSharp1));
+        });
+
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public Task AcceptsDefaultLanguageVersion()
+    {
+        const string source = """
+            class Example
+            {
+                string Get(string? value, string fallback) =>
+                    value is null {|#0:?|} fallback : value;
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                string Get(string? value, string fallback) =>
+                    value ?? fallback;
+            }
+            """;
+
+        var test = new CSharpCodeFixTest<
+            UseNullCoalescingExpressionAnalyzer,
+            UseNullCoalescingExpressionCodeFixProvider,
+            DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+            FixedCode = fixedSource,
+        };
+        test.ExpectedDiagnostics.Add(
+            VerifyCS.Diagnostic(UseNullCoalescingExpressionAnalyzer.DiagnosticId).WithLocation(0));
+        test.SolutionTransforms.Add((solution, projectId) =>
+        {
+            var project = solution.GetProject(projectId)!;
+            return solution.WithProjectParseOptions(
+                projectId,
+                ((CSharpParseOptions)project.ParseOptions!).WithLanguageVersion(LanguageVersion.Default));
+        });
+
+        return test.RunAsync(TestContext.Current.CancellationToken);
     }
 }

@@ -52,14 +52,18 @@ public sealed class UseThrowIfNullCodeFixProvider : CodeFixProvider
         }
 
         var typeExpression = SyntaxFactory.ParseExpression(creation.Type.WithoutTrivia().ToString());
+        var arguments = creation.ArgumentList!.Arguments;
         var invocation = SyntaxFactory.InvocationExpression(
             SyntaxFactory.MemberAccessExpression(
                 SyntaxKind.SimpleMemberAccessExpression,
                 typeExpression,
                 SyntaxFactory.IdentifierName("ThrowIfNull")),
             SyntaxFactory.ArgumentList(
-                SyntaxFactory.SingletonSeparatedList(
-                    SyntaxFactory.Argument(checkedExpression.WithoutTrivia()))));
+                SyntaxFactory.SeparatedList(
+                [
+                    SyntaxFactory.Argument(checkedExpression.WithoutTrivia()),
+                    SyntaxFactory.Argument(arguments[0].Expression.WithoutTrivia()),
+                ])));
 
         var replacement = SyntaxFactory.ExpressionStatement(invocation)
             .WithLeadingTrivia(ifStatement.GetLeadingTrivia())
@@ -69,10 +73,10 @@ public sealed class UseThrowIfNullCodeFixProvider : CodeFixProvider
         var comments = ifStatement.DescendantTrivia(descendIntoTrivia: true)
             .Where(trivia => trivia.SpanStart >= ifStatement.SpanStart &&
                              trivia.Span.End <= ifStatement.Span.End &&
+                             trivia.SpanStart < throwStatement.SemicolonToken.Span.End &&
                              (trivia.IsKind(SyntaxKind.SingleLineCommentTrivia) ||
                               trivia.IsKind(SyntaxKind.MultiLineCommentTrivia)))
             .ToArray();
-        if (comments.Length > 0)
         {
             var indentation = ifStatement.GetLeadingTrivia()
                 .Where(static trivia => trivia.IsKind(SyntaxKind.WhitespaceTrivia));
@@ -115,7 +119,9 @@ public sealed class UseThrowIfNullCodeFixProvider : CodeFixProvider
             _ => null!,
         };
         creation = throwStatement?.Expression as ObjectCreationExpressionSyntax ?? null!;
-        return checkedExpression is not null && creation is not null;
+        return checkedExpression is not null &&
+               creation?.ArgumentList is { Arguments.Count: 1 } &&
+               creation.ArgumentList.Arguments[0].NameColon is null;
     }
 
     private static ExpressionSyntax? GetCheckedExpression(ExpressionSyntax condition)

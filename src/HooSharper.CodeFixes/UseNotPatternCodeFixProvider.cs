@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Composition;
 using System.Linq;
@@ -51,6 +52,17 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
             return document;
         }
 
+        var rewrittenTarget = (ExpressionSyntax)new NestedNotPatternRewriter().Visit(target)!;
+        var replacement = CreatePatternReplacement(logicalNot, rewrittenTarget, isKeyword, pattern);
+        return document.WithSyntaxRoot(root.ReplaceNode(logicalNot, replacement));
+    }
+
+    private static ExpressionSyntax CreatePatternReplacement(
+        PrefixUnaryExpressionSyntax logicalNot,
+        ExpressionSyntax target,
+        SyntaxToken isKeyword,
+        PatternSyntax pattern)
+    {
         var parenthesized = (ParenthesizedExpressionSyntax)logicalNot.Operand;
         var removedTokenTrivia = logicalNot.OperatorToken.TrailingTrivia
             .AddRange(parenthesized.OpenParenToken.LeadingTrivia)
@@ -65,15 +77,23 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
         }
 
         var negatedPattern = SyntaxFactory.UnaryPattern(notKeyword, pattern.WithLeadingTrivia(SyntaxFactory.Space));
-        var trailingTrivia = GetOriginalPattern(logicalNot).GetTrailingTrivia()
-            .AddRange(CommentTrivia(parenthesized.CloseParenToken.LeadingTrivia))
-            .AddRange(CommentTrivia(parenthesized.CloseParenToken.TrailingTrivia))
-            .AddRange(logicalNot.GetTrailingTrivia());
-        var replacement = SyntaxFactory.IsPatternExpression(target.WithoutLeadingTrivia(), isKeyword, negatedPattern)
+        var trailingTrivia = EnsureCommentLineBreaks(
+            GetOriginalPattern(logicalNot).GetTrailingTrivia()
+                .AddRange(logicalNot.GetTrailingTrivia()));
+        return SyntaxFactory.IsPatternExpression(target.WithoutLeadingTrivia(), isKeyword, negatedPattern)
             .WithLeadingTrivia(logicalNot.GetLeadingTrivia().AddRange(removedTokenTrivia))
             .WithTrailingTrivia(trailingTrivia);
+    }
 
-        return document.WithSyntaxRoot(root.ReplaceNode(logicalNot, replacement));
+    private sealed class NestedNotPatternRewriter : CSharpSyntaxRewriter
+    {
+        public override SyntaxNode? VisitPrefixUnaryExpression(PrefixUnaryExpressionSyntax node)
+        {
+            var visited = (PrefixUnaryExpressionSyntax)base.VisitPrefixUnaryExpression(node)!;
+            return TryGetParts(visited, out var target, out var isKeyword, out var pattern)
+                ? CreatePatternReplacement(visited, target, isKeyword, pattern)
+                : visited;
+        }
     }
 
     private static bool TryGetParts(
@@ -129,10 +149,22 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
         };
 
 
-    private static SyntaxTriviaList CommentTrivia(SyntaxTriviaList trivia) =>
-        SyntaxFactory.TriviaList(trivia.Where(item =>
-            item.IsKind(SyntaxKind.SingleLineCommentTrivia) ||
-            item.IsKind(SyntaxKind.MultiLineCommentTrivia)));
+
+    private static SyntaxTriviaList EnsureCommentLineBreaks(SyntaxTriviaList trivia)
+    {
+        var result = new List<SyntaxTrivia>();
+        foreach (var item in trivia)
+        {
+            result.Add(item);
+            if (item.IsKind(SyntaxKind.SingleLineCommentTrivia) ||
+                item.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia))
+            {
+                result.Add(SyntaxFactory.ElasticCarriageReturnLineFeed);
+            }
+        }
+
+        return SyntaxFactory.TriviaList(result);
+    }
 
     private static bool ContainsDesignation(PatternSyntax pattern) =>
         pattern.DescendantNodesAndSelf().Any(node => node is VariableDesignationSyntax);

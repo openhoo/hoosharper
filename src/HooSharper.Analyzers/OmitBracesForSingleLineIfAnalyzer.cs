@@ -50,8 +50,9 @@ public sealed class OmitBracesForSingleLineIfAnalyzer : DiagnosticAnalyzer
         }
 
         var nestedStatement = block.Statements[0];
-        if (nestedStatement is LocalDeclarationStatementSyntax or LocalFunctionStatementSyntax ||
-            hasFollowingElse && nestedStatement is IfStatementSyntax { Else: null } ||
+        if (nestedStatement is LocalDeclarationStatementSyntax or LocalFunctionStatementSyntax or
+            LabeledStatementSyntax ||
+            hasFollowingElse && CanCaptureFollowingElse(nestedStatement) ||
             HasDirective(block) ||
             HasExpandedScopeCollision(block, nestedStatement))
         {
@@ -60,6 +61,25 @@ public sealed class OmitBracesForSingleLineIfAnalyzer : DiagnosticAnalyzer
 
         context.ReportDiagnostic(Diagnostic.Create(Rule, block.OpenBraceToken.GetLocation()));
     }
+
+    private static bool CanCaptureFollowingElse(StatementSyntax statement) =>
+        statement switch
+        {
+            IfStatementSyntax { Else: null } => true,
+            IfStatementSyntax { Else: { Statement: var elseStatement } } =>
+                CanCaptureFollowingElse(elseStatement),
+            WhileStatementSyntax whileStatement => CanCaptureFollowingElse(whileStatement.Statement),
+            ForStatementSyntax forStatement => CanCaptureFollowingElse(forStatement.Statement),
+            ForEachStatementSyntax forEachStatement => CanCaptureFollowingElse(forEachStatement.Statement),
+            ForEachVariableStatementSyntax forEachVariableStatement =>
+                CanCaptureFollowingElse(forEachVariableStatement.Statement),
+            DoStatementSyntax doStatement => CanCaptureFollowingElse(doStatement.Statement),
+            UsingStatementSyntax usingStatement => CanCaptureFollowingElse(usingStatement.Statement),
+            FixedStatementSyntax fixedStatement => CanCaptureFollowingElse(fixedStatement.Statement),
+            LockStatementSyntax lockStatement => CanCaptureFollowingElse(lockStatement.Statement),
+            LabeledStatementSyntax labeledStatement => CanCaptureFollowingElse(labeledStatement.Statement),
+            _ => false,
+        };
 
     private static bool HasExpandedScopeCollision(BlockSyntax block, StatementSyntax nestedStatement)
     {
@@ -94,8 +114,13 @@ public sealed class OmitBracesForSingleLineIfAnalyzer : DiagnosticAnalyzer
         }
 
         var statementIndex = parentBlock.Statements.IndexOf(containingStatement);
-        for (var index = statementIndex + 1; index < parentBlock.Statements.Count; index++)
+        for (var index = 0; index < parentBlock.Statements.Count; index++)
         {
+            if (index == statementIndex)
+            {
+                continue;
+            }
+
             foreach (var token in parentBlock.Statements[index].DescendantTokens())
             {
                 if (token.IsKind(SyntaxKind.IdentifierToken) && introducedNames.Contains(token.ValueText))
@@ -107,6 +132,7 @@ public sealed class OmitBracesForSingleLineIfAnalyzer : DiagnosticAnalyzer
 
         return false;
     }
+
 
     private static bool HasDirective(BlockSyntax block)
     {

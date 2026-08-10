@@ -49,6 +49,8 @@ public enum AnalyzerKind
 
 internal static class AnalyzerCatalog
 {
+    private const int OmitBracesDiagnosticsPerPositiveGroup = 12;
+
     public static ImmutableArray<DiagnosticAnalyzer> All { get; } =
     [
         new PreferEarlyReturnAnalyzer(),
@@ -104,6 +106,146 @@ internal static class AnalyzerCatalog
         AnalyzerKind.HOO1020WrapFluentChain => new WrapFluentChainAnalyzer(),
         _ => throw new ArgumentOutOfRangeException(nameof(analyzer), analyzer, null),
     };
+
+    public static ImmutableArray<string> AllDiagnosticIds { get; } =
+    [
+        PreferEarlyReturnAnalyzer.DiagnosticId,
+        OmitBracesForSingleLineIfAnalyzer.DiagnosticId,
+        RemoveRedundantElseAnalyzer.DiagnosticId,
+        PreferLoopContinueAnalyzer.DiagnosticId,
+        UseTypePatternAnalyzer.DiagnosticId,
+        SimplifyBooleanComparisonAnalyzer.DiagnosticId,
+        UseTryGetValueAnalyzer.DiagnosticId,
+        UseNullCoalescingAssignmentAnalyzer.DiagnosticId,
+        UseThrowIfNullAnalyzer.DiagnosticId,
+        MergeNestedIfAnalyzer.DiagnosticId,
+        UseDictionaryTryAddAnalyzer.DiagnosticId,
+        UseHashSetAddResultAnalyzer.DiagnosticId,
+        UseUsingDeclarationAnalyzer.DiagnosticId,
+        UseNullCoalescingExpressionAnalyzer.DiagnosticId,
+        UseNullConditionalAccessAnalyzer.DiagnosticId,
+        UseStringContainsAnalyzer.DiagnosticId,
+        SimplifyBooleanReturnAnalyzer.DiagnosticId,
+        RemoveRedundantNullConditionalGuardAnalyzer.DiagnosticId,
+        UseNotPatternAnalyzer.DiagnosticId,
+        WrapFluentChainAnalyzer.DiagnosticId,
+    ];
+
+    public static ImmutableArray<string> CollectionDiagnosticIds { get; } =
+    [
+        UseTryGetValueAnalyzer.DiagnosticId,
+        UseDictionaryTryAddAnalyzer.DiagnosticId,
+        UseHashSetAddResultAnalyzer.DiagnosticId,
+    ];
+
+    public static int ExpectedAllDiagnostics(int groups, AnalyzerDiagnosticDensity density) =>
+        ExpectedDiagnosticCounts(groups, density, AllDiagnosticIds).Values.Sum();
+
+    public static int ExpectedCollectionDiagnostics(int groups, AnalyzerDiagnosticDensity density) =>
+        ExpectedDiagnosticCounts(groups, density, CollectionDiagnosticIds).Values.Sum();
+
+    public static int ExpectedIndividualDiagnostics(int groups, AnalyzerDiagnosticDensity density, AnalyzerKind analyzer)
+    {
+        var positiveGroups = ExpectedPositiveGroups(groups, density);
+        var negativeGroups = groups - positiveGroups;
+        var diagnosticId = GetDiagnosticId(analyzer);
+        return (positiveGroups * ExpectedPerPositiveGroup(diagnosticId)) +
+            (negativeGroups * ExpectedPerNegativeGroup(diagnosticId));
+    }
+    public static ImmutableDictionary<string, int> ExpectedDiagnosticCounts(
+        int groups,
+        AnalyzerDiagnosticDensity density,
+        IEnumerable<string> diagnosticIds)
+    {
+        var positiveGroups = ExpectedPositiveGroups(groups, density);
+        var negativeGroups = groups - positiveGroups;
+        var builder = ImmutableDictionary.CreateBuilder<string, int>(StringComparer.Ordinal);
+        foreach (var diagnosticId in diagnosticIds)
+        {
+            builder.Add(
+                diagnosticId,
+                (positiveGroups * ExpectedPerPositiveGroup(diagnosticId)) +
+                (negativeGroups * ExpectedPerNegativeGroup(diagnosticId)));
+        }
+
+        return builder.ToImmutable();
+    }
+
+
+    public static string GetDiagnosticId(AnalyzerKind analyzer) => analyzer switch
+    {
+        AnalyzerKind.HOO1001PreferEarlyReturn => PreferEarlyReturnAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1002OmitBracesForSingleLineIf => OmitBracesForSingleLineIfAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1003RemoveRedundantElse => RemoveRedundantElseAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1004PreferLoopContinue => PreferLoopContinueAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1005UseTypePattern => UseTypePatternAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1006SimplifyBooleanComparison => SimplifyBooleanComparisonAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1007UseTryGetValue => UseTryGetValueAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1008UseNullCoalescingAssignment => UseNullCoalescingAssignmentAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1009UseThrowIfNull => UseThrowIfNullAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1010MergeNestedIf => MergeNestedIfAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1011UseDictionaryTryAdd => UseDictionaryTryAddAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1012UseHashSetAddResult => UseHashSetAddResultAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1013UseUsingDeclaration => UseUsingDeclarationAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1014UseNullCoalescingExpression => UseNullCoalescingExpressionAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1015UseNullConditionalAccess => UseNullConditionalAccessAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1016UseStringContains => UseStringContainsAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1017SimplifyBooleanReturn => SimplifyBooleanReturnAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1018RemoveRedundantNullConditionalGuard => RemoveRedundantNullConditionalGuardAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1019UseNotPattern => UseNotPatternAnalyzer.DiagnosticId,
+        AnalyzerKind.HOO1020WrapFluentChain => WrapFluentChainAnalyzer.DiagnosticId,
+        _ => throw new ArgumentOutOfRangeException(nameof(analyzer), analyzer, null),
+    };
+
+    private static int ExpectedPerPositiveGroup(string diagnosticId) => diagnosticId switch
+    {
+        PreferEarlyReturnAnalyzer.DiagnosticId => 4,
+        OmitBracesForSingleLineIfAnalyzer.DiagnosticId => OmitBracesDiagnosticsPerPositiveGroup,
+        UseTryGetValueAnalyzer.DiagnosticId => 0,
+        RemoveRedundantNullConditionalGuardAnalyzer.DiagnosticId => 0,
+        _ => 1,
+    };
+    private static int ExpectedPerNegativeGroup(string diagnosticId) =>
+        diagnosticId == PreferEarlyReturnAnalyzer.DiagnosticId ? 3 : 0;
+
+
+    private static int ExpectedPositiveGroups(int groups, AnalyzerDiagnosticDensity density) =>
+        density switch
+        {
+            AnalyzerDiagnosticDensity.Clean => 0,
+            AnalyzerDiagnosticDensity.Sparse => (groups + 15) / 16,
+            AnalyzerDiagnosticDensity.Mixed => (groups + 1) / 2,
+            AnalyzerDiagnosticDensity.DenseStress => groups,
+            _ => throw new ArgumentOutOfRangeException(nameof(density), density, null),
+        };
+
+    public static void ValidateDiagnostics(
+        ImmutableArray<Diagnostic> diagnostics,
+        IReadOnlyDictionary<string, int> expectedCounts,
+        string workload)
+    {
+        if (diagnostics.Any(static diagnostic => diagnostic.Id == "AD0001"))
+        {
+            throw new InvalidOperationException($"{workload} produced AD0001 analyzer failure.");
+        }
+
+        var unexpected = diagnostics.FirstOrDefault(diagnostic => !expectedCounts.ContainsKey(diagnostic.Id));
+        if (unexpected is not null)
+        {
+            throw new InvalidOperationException(
+                $"{workload} produced unexpected diagnostic {unexpected.Id}: {unexpected}.");
+        }
+
+        foreach (var expected in expectedCounts)
+        {
+            var actual = diagnostics.Count(diagnostic => diagnostic.Id == expected.Key);
+            if (actual != expected.Value)
+            {
+                throw new InvalidOperationException(
+                    $"{workload} produced {actual} {expected.Key} diagnostics; expected {expected.Value}.");
+            }
+        }
+    }
 }
 
 [MemoryDiagnoser]
@@ -131,6 +273,7 @@ public class AnalyzerBenchmarks
     [Params(true, false)]
     public bool ConcurrentAnalysis { get; set; }
 
+
     [GlobalSetup]
     public async Task Setup()
     {
@@ -142,12 +285,26 @@ public class AnalyzerBenchmarks
         RoslynFixture.ValidateNoCompilerErrors(_compilation);
         _analyzerOptions = project.AnalyzerOptions;
 
-        _allExpected = await GetStableDiagnosticCountAsync(AnalyzerCatalog.All).ConfigureAwait(false);
-        _collectionsExpected = await GetStableDiagnosticCountAsync(AnalyzerCatalog.Collections).ConfigureAwait(false);
-        if (Density != AnalyzerDiagnosticDensity.Clean && (_allExpected == 0 || _collectionsExpected == 0))
-        {
-            throw new InvalidOperationException("Positive analyzer workload produced no diagnostics.");
-        }
+        var allExpectedCounts = AnalyzerCatalog.ExpectedDiagnosticCounts(
+            Groups,
+            Density,
+            AnalyzerCatalog.AllDiagnosticIds);
+        var collectionExpectedCounts = AnalyzerCatalog.ExpectedDiagnosticCounts(
+            Groups,
+            Density,
+            AnalyzerCatalog.CollectionDiagnosticIds);
+        _allExpected = allExpectedCounts.Values.Sum();
+        _collectionsExpected = collectionExpectedCounts.Values.Sum();
+        await ValidateStableDiagnosticCountAsync(
+                AnalyzerCatalog.All,
+                allExpectedCounts,
+                "all analyzer fixture")
+            .ConfigureAwait(false);
+        await ValidateStableDiagnosticCountAsync(
+                AnalyzerCatalog.Collections,
+                collectionExpectedCounts,
+                "collection analyzer fixture")
+            .ConfigureAwait(false);
     }
 
     [Benchmark(Baseline = true)]
@@ -199,21 +356,25 @@ public class AnalyzerBenchmarks
         concurrentAnalysis: ConcurrentAnalysis,
         logAnalyzerExecutionTime: logAnalyzerExecutionTime,
         reportSuppressedDiagnostics: false);
-
-    private async Task<int> GetStableDiagnosticCountAsync(ImmutableArray<DiagnosticAnalyzer> analyzers)
-    {
-        var first = (await RunAsync(analyzers).ConfigureAwait(false)).Length;
-        var second = (await RunAsync(analyzers).ConfigureAwait(false)).Length;
-        EnsureExpected(second, first, "fixture validation");
-        return first;
-    }
-
     private static void EnsureExpected(int actual, int expected, string workload)
     {
         if (actual != expected)
         {
-            throw new InvalidOperationException($"{workload} produced {actual} diagnostics; expected {expected}.");
+            throw new InvalidOperationException(
+                $"{workload} produced {actual} diagnostics; expected {expected}.");
         }
+    }
+
+
+    private async Task ValidateStableDiagnosticCountAsync(
+        ImmutableArray<DiagnosticAnalyzer> analyzers,
+        IReadOnlyDictionary<string, int> expectedCounts,
+        string workload)
+    {
+        var first = await RunAsync(analyzers).ConfigureAwait(false);
+        AnalyzerCatalog.ValidateDiagnostics(first, expectedCounts, workload);
+        var second = await RunAsync(analyzers).ConfigureAwait(false);
+        AnalyzerCatalog.ValidateDiagnostics(second, expectedCounts, $"{workload} repeat");
     }
 }
 
@@ -252,12 +413,16 @@ public class IndividualAnalyzerBenchmarks
         RoslynFixture.ValidateNoCompilerErrors(_compilation);
         _analyzerOptions = project.AnalyzerOptions;
         _analyzer = [AnalyzerCatalog.Create(Analyzer)];
-        _expectedDiagnostics = (await RunAsync().ConfigureAwait(false)).Length;
-        var repeatedCount = (await RunAsync().ConfigureAwait(false)).Length;
-        if (_expectedDiagnostics == 0 || repeatedCount != _expectedDiagnostics)
-        {
-            throw new InvalidOperationException($"Mixed fixture for {Analyzer} produced an invalid diagnostic count.");
-        }
+        _expectedDiagnostics = AnalyzerCatalog.ExpectedIndividualDiagnostics(
+            Groups,
+            AnalyzerDiagnosticDensity.Mixed,
+            Analyzer);
+        var expectedId = AnalyzerCatalog.GetDiagnosticId(Analyzer);
+        var expectedCounts = ImmutableDictionary<string, int>.Empty.Add(expectedId, _expectedDiagnostics);
+        var first = await RunAsync().ConfigureAwait(false);
+        AnalyzerCatalog.ValidateDiagnostics(first, expectedCounts, $"Mixed fixture for {Analyzer}");
+        var second = await RunAsync().ConfigureAwait(false);
+        AnalyzerCatalog.ValidateDiagnostics(second, expectedCounts, $"Mixed fixture repeat for {Analyzer}");
     }
 
     [Benchmark]
@@ -292,8 +457,9 @@ public class IndividualAnalyzerBenchmarks
 public class AnalyzerTelemetryBenchmarks
 {
     private readonly Consumer _consumer = new();
-    private CompilationWithAnalyzers? _analysis;
-    private int _expectedDiagnostics;
+    private Compilation? _compilation;
+    private AnalyzerOptions? _analyzerOptions;
+    private ImmutableDictionary<string, int> _expectedDiagnosticCounts = ImmutableDictionary<string, int>.Empty;
 
     [Params(100)]
     public int Groups { get; set; }
@@ -308,39 +474,50 @@ public class AnalyzerTelemetryBenchmarks
         var project = RoslynFixture.CreateProject(
             workspace,
             BenchmarkSource.CreateAnalyzerSources(Groups, AnalyzerDiagnosticDensity.Mixed, AnalyzerTreeShape.SingleLargeTree));
-        var compilation = await project.GetCompilationAsync().ConfigureAwait(false)
+        _compilation = await project.GetCompilationAsync().ConfigureAwait(false)
             ?? throw new InvalidOperationException("Benchmark compilation could not be created.");
-        RoslynFixture.ValidateNoCompilerErrors(compilation);
-        _analysis = compilation.WithAnalyzers(
-            AnalyzerCatalog.All,
-            new CompilationWithAnalyzersOptions(
-                project.AnalyzerOptions,
-                null,
-                concurrentAnalysis: ConcurrentAnalysis,
-                logAnalyzerExecutionTime: true,
-                reportSuppressedDiagnostics: false));
-        _expectedDiagnostics = (await _analysis.GetAnalyzerDiagnosticsAsync().ConfigureAwait(false)).Length;
-        if (_expectedDiagnostics == 0)
-        {
-            throw new InvalidOperationException("Telemetry fixture produced no diagnostics.");
-        }
+        RoslynFixture.ValidateNoCompilerErrors(_compilation);
+        _analyzerOptions = project.AnalyzerOptions;
+        _expectedDiagnosticCounts = AnalyzerCatalog.ExpectedDiagnosticCounts(
+            Groups,
+            AnalyzerDiagnosticDensity.Mixed,
+            AnalyzerCatalog.AllDiagnosticIds);
+
+        var result = await CreateAnalysis()
+            .GetAnalysisResultAsync(CancellationToken.None)
+            .ConfigureAwait(false);
+        AnalyzerCatalog.ValidateDiagnostics(
+            result.GetAllDiagnostics(),
+            _expectedDiagnosticCounts,
+            "Telemetry fixture");
     }
 
     [Benchmark]
     [BenchmarkCategory("TelemetryAttribution")]
     public async Task AnalysisResultWithTelemetry()
     {
-        var result = await (_analysis ?? throw new InvalidOperationException("GlobalSetup was not called."))
+        var result = await CreateAnalysis()
             .GetAnalysisResultAsync(CancellationToken.None)
             .ConfigureAwait(false);
         var diagnostics = result.GetAllDiagnostics();
-        if (diagnostics.Length != _expectedDiagnostics)
-        {
-            throw new InvalidOperationException($"Telemetry analysis produced {diagnostics.Length} diagnostics; expected {_expectedDiagnostics}.");
-        }
+        AnalyzerCatalog.ValidateDiagnostics(
+            diagnostics,
+            _expectedDiagnosticCounts,
+            "Telemetry analysis");
         _consumer.Consume(diagnostics.Length);
         _consumer.Consume(result.AnalyzerTelemetryInfo.Count);
     }
+
+    private CompilationWithAnalyzers CreateAnalysis() =>
+        (_compilation ?? throw new InvalidOperationException("GlobalSetup was not called."))
+        .WithAnalyzers(
+            AnalyzerCatalog.All,
+            new CompilationWithAnalyzersOptions(
+                _analyzerOptions ?? throw new InvalidOperationException("GlobalSetup was not called."),
+                null,
+                concurrentAnalysis: ConcurrentAnalysis,
+                logAnalyzerExecutionTime: true,
+                reportSuppressedDiagnostics: false));
 }
 
 #pragma warning disable RS1036, RS1038, RS1041 // Benchmark-only analyzer executes in the net10.0 harness.

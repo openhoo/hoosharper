@@ -59,7 +59,7 @@ public sealed class WrapFluentChainCodeFixProvider : CodeFixProvider
         }
 
         var indentation = GetIndentation(containingNode, sourceText) + GetContinuationIndentation(document, expression.SyntaxTree);
-        var endOfLine = DetectEndOfLine(sourceText);
+        var endOfLine = DetectEndOfLine(sourceText, expression.SpanStart);
         var endOfLineTrivia = SyntaxFactory.EndOfLine(endOfLine);
         var indentationTrivia = SyntaxFactory.Whitespace(indentation);
         var replacementDots = new SyntaxToken[dots.Count];
@@ -145,12 +145,15 @@ public sealed class WrapFluentChainCodeFixProvider : CodeFixProvider
             {
                 if (options.TryGetValue(WrapFluentChainAnalyzer.TabWidthOption, out var configuredTabWidth) &&
                     int.TryParse(configuredTabWidth, out var tabWidth) &&
-                    tabWidth > 0)
+                    tabWidth > 0 &&
+                    tabWidth <= WrapFluentChainAnalyzer.MaximumConfiguredWidth)
                 {
                     indentSize = tabWidth;
                 }
             }
-            else if (int.TryParse(configuredIndentSize, out var parsedIndentSize) && parsedIndentSize > 0)
+            else if (int.TryParse(configuredIndentSize, out var parsedIndentSize) &&
+                     parsedIndentSize > 0 &&
+                     parsedIndentSize <= WrapFluentChainAnalyzer.MaximumConfiguredWidth)
             {
                 indentSize = parsedIndentSize;
             }
@@ -159,23 +162,30 @@ public sealed class WrapFluentChainCodeFixProvider : CodeFixProvider
         return new string(' ', indentSize);
     }
 
-    private static string DetectEndOfLine(Microsoft.CodeAnalysis.Text.SourceText sourceText)
+    private static string DetectEndOfLine(
+        Microsoft.CodeAnalysis.Text.SourceText sourceText,
+        int position)
     {
-        for (var position = 0; position < sourceText.Length; position++)
+        var line = sourceText.Lines.GetLineFromPosition(position);
+        var lineBreakLength = line.EndIncludingLineBreak - line.End;
+        if (lineBreakLength > 0)
         {
-            switch (sourceText[position])
+            return sourceText.ToString(new Microsoft.CodeAnalysis.Text.TextSpan(line.End, lineBreakLength));
+        }
+
+        for (var index = line.LineNumber - 1; index >= 0; index--)
+        {
+            var previous = sourceText.Lines[index];
+            lineBreakLength = previous.EndIncludingLineBreak - previous.End;
+            if (lineBreakLength > 0)
             {
-                case '\n':
-                    return "\n";
-                case '\r':
-                    return position + 1 < sourceText.Length && sourceText[position + 1] == '\n'
-                        ? "\r\n"
-                        : "\r";
+                return sourceText.ToString(new Microsoft.CodeAnalysis.Text.TextSpan(previous.End, lineBreakLength));
             }
         }
 
         return "\n";
     }
+
 
     private static bool ContainsEndOfLine(SyntaxTriviaList trivia)
     {

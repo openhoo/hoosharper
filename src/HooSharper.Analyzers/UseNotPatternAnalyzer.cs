@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -30,24 +31,41 @@ public sealed class UseNotPatternAnalyzer : DiagnosticAnalyzer
         {
             var expressionType = compilationContext.Compilation.GetTypeByMetadataName(
                 "System.Linq.Expressions.Expression`1");
+            var queryableType = compilationContext.Compilation.GetTypeByMetadataName(
+                "System.Linq.IQueryable");
             compilationContext.RegisterSyntaxNodeAction(
-                nodeContext => AnalyzeLogicalNot(nodeContext, expressionType),
+                nodeContext => AnalyzeLogicalNot(nodeContext, expressionType, queryableType),
                 SyntaxKind.LogicalNotExpression);
         });
     }
 
     private static void AnalyzeLogicalNot(
         SyntaxNodeAnalysisContext context,
-        INamedTypeSymbol? expressionType)
+        INamedTypeSymbol? expressionType,
+        INamedTypeSymbol? queryableType)
     {
-        if (context.Node.SyntaxTree.Options is not CSharpParseOptions { LanguageVersion: >= LanguageVersion.CSharp9 } ||
+        if (context.Node.SyntaxTree.Options is not CSharpParseOptions parseOptions ||
+            parseOptions.LanguageVersion != LanguageVersion.Default &&
+            parseOptions.LanguageVersion < LanguageVersion.CSharp9 ||
             context.Node is not PrefixUnaryExpressionSyntax
             {
                 Operand: ParenthesizedExpressionSyntax { Expression: var expression },
             } logicalNot ||
             logicalNot.ContainsDirectives ||
-            !IsSupportedIsExpression(expression) ||
-            IsWithinExpressionTree(context.Node, context.SemanticModel, expressionType, context.CancellationToken))
+            !IsSupportedIsExpression(
+                expression,
+                context.SemanticModel,
+                context.CancellationToken) ||
+            HasEligibleNotAncestor(
+                logicalNot,
+                context.SemanticModel,
+                context.CancellationToken) ||
+            IsWithinExpressionTree(
+                context.Node,
+                context.SemanticModel,
+                expressionType,
+                queryableType,
+                context.CancellationToken))
         {
             return;
         }
@@ -59,18 +77,28 @@ public sealed class UseNotPatternAnalyzer : DiagnosticAnalyzer
         SyntaxNode node,
         SemanticModel semanticModel,
         INamedTypeSymbol? expressionType,
+        INamedTypeSymbol? queryableType,
         System.Threading.CancellationToken cancellationToken)
     {
-        if (expressionType is null)
-        {
-            return false;
-        }
         for (var ancestor = node.Parent; ancestor is not null; ancestor = ancestor.Parent)
         {
-            if (ancestor is AnonymousFunctionExpressionSyntax anonymousFunction &&
+            if (expressionType is not null &&
+                ancestor is AnonymousFunctionExpressionSyntax anonymousFunction &&
                 semanticModel.GetTypeInfo(anonymousFunction, cancellationToken).ConvertedType is
                     INamedTypeSymbol convertedType &&
                 SymbolEqualityComparer.Default.Equals(convertedType.OriginalDefinition, expressionType))
+            {
+                return true;
+            }
+
+            if (queryableType is not null &&
+                ancestor is QueryExpressionSyntax queryExpression &&
+                semanticModel.GetTypeInfo(queryExpression, cancellationToken).Type is INamedTypeSymbol queryType &&
+                (SymbolEqualityComparer.Default.Equals(queryType.OriginalDefinition, queryableType) ||
+                    queryType.AllInterfaces.Any(
+                        interfaceType => SymbolEqualityComparer.Default.Equals(
+                            interfaceType.OriginalDefinition,
+                            queryableType))))
             {
                 return true;
             }
@@ -79,12 +107,65 @@ public sealed class UseNotPatternAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    private static bool IsSupportedIsExpression(ExpressionSyntax expression) => expression switch
+    private static bool HasEligibleNotAncestor(
+        PrefixUnaryExpressionSyntax logicalNot,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
     {
-        IsPatternExpressionSyntax isPattern => !ContainsDesignation(isPattern.Pattern),
-        BinaryExpressionSyntax { RawKind: (int)SyntaxKind.IsExpression, Right: TypeSyntax } => true,
-        _ => false,
-    };
+        for (var ancestor = logicalNot.Parent; ancestor is not null; ancestor = ancestor.Parent)
+        {
+            if (ancestor is PrefixUnaryExpressionSyntax
+                {
+                    Operand: ParenthesizedExpressionSyntax { Expression: var expression },
+                } &&
+                IsSupportedIsExpression(expression, semanticModel, cancellationToken))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsSupportedIsExpression(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        ExpressionSyntax target;
+        TypeSyntax? patternType;
+        switch (expression)
+        {
+            case IsPatternExpressionSyntax isPattern when !ContainsDesignation(isPattern.Pattern):
+                target = isPattern.Expression;
+                patternType = isPattern.Pattern is TypePatternSyntax typePattern ? typePattern.Type : null;
+                break;
+            case BinaryExpressionSyntax
+            {
+                RawKind: (int)SyntaxKind.IsExpression,
+                Left: var left,
+                Right: TypeSyntax type,
+            }:
+                target = left;
+                patternType = type;
+                break;
+            default:
+                return false;
+        }
+
+        if (patternType is null)
+        {
+            return true;
+        }
+
+        var targetType = semanticModel.GetTypeInfo(target, cancellationToken).Type;
+        var matchedType = semanticModel.GetTypeInfo(patternType, cancellationToken).Type;
+        return targetType is null ||
+               matchedType is null ||
+               !targetType.IsValueType ||
+               targetType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T ||
+               !SymbolEqualityComparer.Default.Equals(targetType, matchedType);
+    }
 
     internal static bool ContainsDesignation(PatternSyntax pattern)
     {

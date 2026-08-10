@@ -66,7 +66,6 @@ public sealed class SimplifyBooleanReturnAnalyzerTests
                     // branch result
                     // false when both
                     // fallback result
-
                 }
             }
             """;
@@ -224,5 +223,28 @@ public sealed class SimplifyBooleanReturnAnalyzerTests
             VerifyCS.Diagnostic(SimplifyBooleanReturnAnalyzer.DiagnosticId).WithLocation(1),
         };
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+    [Fact]
+    public Task DoesNotRewriteUserDefinedLogicalNot()
+    {
+        const string source = """
+            struct Flag
+            {
+                public static bool operator !(Flag value) => false;
+                public static implicit operator bool(Flag value) => true;
+            }
+
+            class Example
+            {
+                bool Run(Flag value)
+                {
+                    if (!value)
+                        return false;
+                    return true;
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
     }
 }

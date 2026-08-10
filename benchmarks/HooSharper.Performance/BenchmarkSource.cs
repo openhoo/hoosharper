@@ -140,6 +140,7 @@ internal static class BenchmarkSource
             source.AppendLine("            Consume(!enabled);");
             source.AppendLine("            Consume(enabled);");
             source.AppendLine("        }");
+            source.AppendLine("        Consume(enabled);");
         }
         source.AppendLine("    }");
 
@@ -147,10 +148,10 @@ internal static class BenchmarkSource
         source.AppendLine("    {");
         source.AppendLine("        if (enabled)");
         source.AppendLine("        {");
-        source.AppendLine("            return 1;");
-        source.AppendLine("        }");
         if (positive)
         {
+            source.AppendLine("            return 1;");
+            source.AppendLine("        }");
             source.AppendLine("        else");
             source.AppendLine("        {");
             source.AppendLine("            return 0;");
@@ -158,6 +159,9 @@ internal static class BenchmarkSource
         }
         else
         {
+            source.AppendLine("            Consume(enabled);");
+            source.AppendLine("            return 1;");
+            source.AppendLine("        }");
             source.AppendLine("        return 0;");
         }
         source.AppendLine("    }");

@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 using Microsoft.CodeAnalysis.Diagnostics;
 
 namespace HooSharper.Analyzers;
@@ -31,13 +32,17 @@ public sealed class UseTypePatternAnalyzer : DiagnosticAnalyzer
 
     private static void AnalyzeLocalDeclaration(SyntaxNodeAnalysisContext context)
     {
-        if (context.Node.SyntaxTree.Options is not CSharpParseOptions { LanguageVersion: >= LanguageVersion.CSharp7 })
+        if (context.Node.SyntaxTree.Options is not CSharpParseOptions parseOptions ||
+            !SupportsTypePatterns(parseOptions.LanguageVersion))
         {
             return;
         }
 
         var declarationStatement = (LocalDeclarationStatementSyntax)context.Node;
-        if (declarationStatement.Declaration.Variables.Count != 1 ||
+        if (!declarationStatement.Declaration.Type.IsVar ||
+            !declarationStatement.UsingKeyword.IsKind(SyntaxKind.None) ||
+            !declarationStatement.AwaitKeyword.IsKind(SyntaxKind.None) ||
+            declarationStatement.Declaration.Variables.Count != 1 ||
             declarationStatement.Parent is not BlockSyntax block ||
             declarationStatement.ContainsDirectives)
         {
@@ -45,7 +50,8 @@ public sealed class UseTypePatternAnalyzer : DiagnosticAnalyzer
         }
 
         var declarator = declarationStatement.Declaration.Variables[0];
-        if (declarator.Initializer?.Value is not BinaryExpressionSyntax asExpression ||
+        if (declarator.Identifier.ValueText == "_" ||
+            declarator.Initializer?.Value is not BinaryExpressionSyntax asExpression ||
             !asExpression.IsKind(SyntaxKind.AsExpression) ||
             asExpression.Right is NullableTypeSyntax)
         {
@@ -61,7 +67,13 @@ public sealed class UseTypePatternAnalyzer : DiagnosticAnalyzer
         }
 
         var checkedIdentifier = GetNullCheckedIdentifier(ifStatement.Condition);
-        if (checkedIdentifier is null)
+        var nullCheck = WalkDownParentheses(ifStatement.Condition);
+        if (checkedIdentifier is null ||
+            (nullCheck is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.NotEqualsExpression } &&
+             context.SemanticModel.GetOperation(nullCheck, context.CancellationToken) is not IBinaryOperation
+             {
+                 OperatorMethod: null,
+             }))
         {
             return;
         }
@@ -161,6 +173,9 @@ public sealed class UseTypePatternAnalyzer : DiagnosticAnalyzer
 
         return false;
     }
+    private static bool SupportsTypePatterns(LanguageVersion languageVersion) =>
+        languageVersion == LanguageVersion.Default || languageVersion >= LanguageVersion.CSharp7;
+
 
     private static bool IsNullableValueType(ITypeSymbol type) =>
         type is INamedTypeSymbol namedType &&

@@ -337,4 +337,53 @@ public sealed class WrapFluentChainAnalyzerTests
     {
         public ConfigTest() => ReferenceAssemblies = ReferenceAssemblies.Net.Net100;
     }
+
+    [Fact]
+    public Task WrapsChainStartingAfterElementAccess()
+    {
+        const string source = """
+            using System.Linq;
+            class Example
+            {
+                int[] Run(int[][] source) => {|#0:source[0].Where(value => value > 0).Select(value => value + 1).ToArray()|};
+            }
+            """;
+        const string fixedSource = """
+            using System.Linq;
+            class Example
+            {
+                int[] Run(int[][] source) => source[0]
+                    .Where(value => value > 0)
+                    .Select(value => value + 1)
+                    .ToArray();
+            }
+            """;
+
+        return VerifyWithConfigAsync(
+            source,
+            fixedSource,
+            VerifyCS.Diagnostic(WrapFluentChainAnalyzer.DiagnosticId).WithLocation(0),
+            "hoosharper_max_line_length = 40");
+    }
+
+    [Fact]
+    public Task IgnoresPropertyOnlyAccessChains()
+    {
+        const string source = """
+            class Example
+            {
+                int Run(Holder holder) => holder.First.Second.Third.Fourth;
+            }
+
+            class Holder
+            {
+                public Holder First => this;
+                public Holder Second => this;
+                public Holder Third => this;
+                public int Fourth => 0;
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
 }

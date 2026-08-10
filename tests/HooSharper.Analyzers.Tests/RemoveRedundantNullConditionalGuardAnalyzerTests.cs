@@ -1,4 +1,8 @@
 using HooSharper.CodeFixes;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Testing;
+using Microsoft.CodeAnalysis.Testing;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
     HooSharper.Analyzers.RemoveRedundantNullConditionalGuardAnalyzer,
     HooSharper.CodeFixes.RemoveRedundantNullConditionalGuardCodeFixProvider>;
@@ -554,4 +558,88 @@ public sealed class RemoveRedundantNullConditionalGuardAnalyzerTests
 
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
+
+    [Fact]
+    public Task IgnoresRefReturnReceiver()
+    {
+        const string source = """
+            class Service
+            {
+                public void Run() { }
+            }
+
+            class Example
+            {
+                static ref Service? Get(ref Service? service) => ref service;
+
+                void Invoke(ref Service? service)
+                {
+                    if (Get(ref service) is not null)
+                    {
+                        Get(ref service)?.Run();
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task AcceptsDefaultLanguageVersion()
+    {
+        const string source = """
+            class Service
+            {
+                public void Run() { }
+            }
+
+            class Example
+            {
+                void Invoke(Service? service)
+                {
+                    if (service {|#0:is|} not null)
+                    {
+                        service?.Run();
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Service
+            {
+                public void Run() { }
+            }
+
+            class Example
+            {
+                void Invoke(Service? service)
+                {
+                    service?.Run();
+                }
+            }
+            """;
+
+        var test = new CSharpCodeFixTest<
+            RemoveRedundantNullConditionalGuardAnalyzer,
+            RemoveRedundantNullConditionalGuardCodeFixProvider,
+            DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+            FixedCode = fixedSource,
+        };
+        test.ExpectedDiagnostics.Add(
+            VerifyCS.Diagnostic(RemoveRedundantNullConditionalGuardAnalyzer.DiagnosticId).WithLocation(0));
+        test.SolutionTransforms.Add((solution, projectId) =>
+        {
+            var project = solution.GetProject(projectId)!;
+            return solution.WithProjectParseOptions(
+                projectId,
+                ((CSharpParseOptions)project.ParseOptions!).WithLanguageVersion(LanguageVersion.Default));
+        });
+
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
+
 }

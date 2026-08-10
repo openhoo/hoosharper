@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -34,6 +35,7 @@ public sealed class RemoveRedundantElseAnalyzer : DiagnosticAnalyzer
         var ifStatement = (IfStatementSyntax)context.Node;
         var elseClause = ifStatement.Else;
         if (elseClause is null || elseClause.Statement is IfStatementSyntax || ifStatement.Parent is ElseClauseSyntax ||
+            HasDirective(elseClause) ||
             !DefinitelyTerminates(ifStatement.Statement, context.SemanticModel))
         {
             return;
@@ -78,4 +80,7 @@ public sealed class RemoveRedundantElseAnalyzer : DiagnosticAnalyzer
 
         return false;
     }
+
+    private static bool HasDirective(SyntaxNode node) =>
+        node.DescendantTrivia(descendIntoTrivia: true).Any(trivia => trivia.IsDirective);
 }

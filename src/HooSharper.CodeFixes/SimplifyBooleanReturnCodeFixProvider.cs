@@ -11,6 +11,7 @@ using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Formatting;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace HooSharper.CodeFixes;
 
@@ -47,8 +48,10 @@ public sealed class SimplifyBooleanReturnCodeFixProvider : CodeFixProvider
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-        if (root is null || ifStatement.Parent is not BlockSyntax parentBlock ||
-            !TryGetReturnedLiteral(ifStatement.Statement, out var branchValue))
+        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+        if (root is null || semanticModel is null || ifStatement.Parent is not BlockSyntax parentBlock ||
+            !TryGetReturnedLiteral(ifStatement.Statement, out var branchValue) ||
+            ContainsUserDefinedNot(semanticModel.GetOperation(ifStatement.Condition, cancellationToken)))
         {
             return document;
         }
@@ -70,7 +73,7 @@ public sealed class SimplifyBooleanReturnCodeFixProvider : CodeFixProvider
         var significantTrivia = CollectSignificantTrivia(ifStatement, nextReturn);
         var replacement = SyntaxFactory.ReturnStatement(expression)
             .WithLeadingTrivia(ifStatement.GetLeadingTrivia())
-            .WithTrailingTrivia(significantTrivia.AddRange(nextReturn.GetTrailingTrivia()))
+            .WithTrailingTrivia(significantTrivia)
             .WithAdditionalAnnotations(Formatter.Annotation);
 
         var statements = parentBlock.Statements.RemoveAt(index).Insert(index, replacement).RemoveAt(index + 1);
@@ -140,7 +143,9 @@ public sealed class SimplifyBooleanReturnCodeFixProvider : CodeFixProvider
     private static ExpressionSyntax Negate(ExpressionSyntax expression)
     {
         var unparenthesized = WalkDownParentheses(expression);
-        if (unparenthesized is PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression } logicalNot)
+        if (unparenthesized is PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression } logicalNot &&
+            logicalNot.GetLeadingTrivia().Count == 0 &&
+            logicalNot.GetTrailingTrivia().Count == 0)
         {
             return WalkDownParentheses(logicalNot.Operand).WithoutTrivia();
         }
@@ -151,6 +156,11 @@ public sealed class SimplifyBooleanReturnCodeFixProvider : CodeFixProvider
                 ? SyntaxFactory.ParenthesizedExpression(unparenthesized.WithoutTrivia())
                 : unparenthesized.WithoutTrivia());
     }
+
+    private static bool ContainsUserDefinedNot(IOperation? operation) =>
+        operation is not null &&
+        operation.DescendantsAndSelf().OfType<IUnaryOperation>().Any(unary =>
+            unary.OperatorKind == UnaryOperatorKind.Not && unary.OperatorMethod is not null);
 
     private static ExpressionSyntax WalkDownParentheses(ExpressionSyntax expression)
     {

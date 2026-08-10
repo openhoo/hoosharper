@@ -26,7 +26,6 @@ env:
 jobs:
   commitlint:
     name: Conventional Commits
-    if: github.event_name != 'workflow_dispatch' && (github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):'))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -47,12 +46,16 @@ jobs:
 
       - name: Run Commitlint
         env:
-          FROM_SHA: ${{ github.event.pull_request.base.sha }}
-          TO_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_FROM_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_TO_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_FROM_SHA: ${{ github.event.before }}
+          PUSH_TO_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            bunx --no-install commitlint --from "$FROM_SHA" --to "$TO_SHA" --verbose
+            bunx --no-install commitlint --from "$PR_FROM_SHA" --to "$PR_TO_SHA" --verbose
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            bunx --no-install commitlint --from "$PUSH_FROM_SHA" --to "$PUSH_TO_SHA" --verbose
           else
             bunx --no-install commitlint --last --verbose
           fi
@@ -70,12 +73,21 @@ jobs:
           bun install --frozen-lockfile
 
       - name: Lint commits
+        env:
+          PR_FROM_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_TO_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_FROM_SHA: ${{ github.event.before }}
+          PUSH_TO_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             bun "$HOOVERSION_DIR/src/cli.ts" lint \
-              --from "${{ github.event.pull_request.base.sha }}" \
-              --to "${{ github.event.pull_request.head.sha }}"
+              --from "$PR_FROM_SHA" \
+              --to "$PR_TO_SHA"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            bun "$HOOVERSION_DIR/src/cli.ts" lint \
+              --from "$PUSH_FROM_SHA" \
+              --to "$PUSH_TO_SHA"
           else
             bun "$HOOVERSION_DIR/src/cli.ts" lint --last
           fi
