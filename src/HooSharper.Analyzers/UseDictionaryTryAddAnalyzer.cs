@@ -84,7 +84,6 @@ public sealed class UseDictionaryTryAddAnalyzer : DiagnosticAnalyzer
 
         var containsKey = containsInvocation.ArgumentList.Arguments[0].Expression;
         var addKey = addInvocation.ArgumentList.Arguments[0].Expression;
-        var value = addInvocation.ArgumentList.Arguments[1].Expression;
         if (!SyntaxFactory.AreEquivalent(containsMember.Expression, addMember.Expression) ||
             !SyntaxFactory.AreEquivalent(containsKey, addKey))
         {

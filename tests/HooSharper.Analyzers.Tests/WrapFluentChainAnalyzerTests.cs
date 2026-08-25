@@ -1,4 +1,5 @@
 using HooSharper.CodeFixes;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Testing;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
     HooSharper.Analyzers.WrapFluentChainAnalyzer,
@@ -484,5 +485,68 @@ public sealed class WrapFluentChainAnalyzerTests
             fixedSource,
             VerifyCS.Diagnostic(WrapFluentChainAnalyzer.DiagnosticId).WithLocation(0),
             "hoosharper_max_line_length = 40\nindent_style = space\nindent_size = tab\ntab_width = 3");
+    }
+
+    [Fact]
+    public Task IgnoresInterpolationHoleChainBeforeCSharp11()
+    {
+        const string source = """
+            class Example
+            {
+                void Log(User user)
+                {
+                    System.Console.WriteLine($"Processing payment audit event for account [{user.FullName.Trim().ToUpperInvariant().PadRight(40).PadLeft(80)}] was processed");
+                }
+            }
+
+            class User
+            {
+                public string FullName => string.Empty;
+            }
+            """;
+
+        var test = new ConfigTest { TestCode = source };
+        test.SolutionTransforms.Add((solution, projectId) =>
+            solution.WithProjectParseOptions(
+                projectId,
+                ((CSharpParseOptions)solution.GetProject(projectId)!.ParseOptions!)
+                    .WithLanguageVersion(LanguageVersion.CSharp10)));
+
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public Task ReportsInterpolationHoleChainOnCSharp11()
+    {
+        const string source = """
+            class Example
+            {
+                void Log(User user)
+                {
+                    System.Console.WriteLine($"Processing payment audit event for account [{{|#0:user.FullName.Trim().ToUpperInvariant().PadRight(40).PadLeft(80)|}}] was processed");
+                }
+            }
+
+            class User
+            {
+                public string FullName => string.Empty;
+            }
+            """;
+
+        var test = new ConfigTest
+        {
+            TestCode = source,
+            ExpectedDiagnostics =
+            {
+                VerifyCS.Diagnostic(WrapFluentChainAnalyzer.DiagnosticId).WithLocation(0),
+            },
+        };
+        test.SolutionTransforms.Add((solution, projectId) =>
+            solution.WithProjectParseOptions(
+                projectId,
+                ((CSharpParseOptions)solution.GetProject(projectId)!.ParseOptions!)
+                    .WithLanguageVersion(LanguageVersion.CSharp11)));
+
+        return test.RunAsync(TestContext.Current.CancellationToken);
     }
 }

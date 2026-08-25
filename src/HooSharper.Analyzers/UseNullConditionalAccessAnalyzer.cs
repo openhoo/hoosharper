@@ -46,8 +46,8 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
         if (context.Node.SyntaxTree.Options is not CSharpParseOptions parseOptions ||
             (parseOptions.LanguageVersion != LanguageVersion.Default &&
              parseOptions.LanguageVersion < LanguageVersion.CSharp6) ||
-            HasDirective(conditional) ||
             !HasCandidateShape(conditional) ||
+            HasDirective(conditional) ||
             IsWithinExpressionTree(conditional, context.SemanticModel, expressionType, context.CancellationToken) ||
             !TryGetCandidate(conditional, context.SemanticModel, context.CancellationToken,
                 out var receiver, out var access))

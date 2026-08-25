@@ -889,4 +889,462 @@ public sealed class UseTryGetValueAnalyzerTests
         };
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
     }
+
+    [Fact]
+    public Task IgnoresObjectCreationBetweenLookups()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private sealed class CountListener
+                {
+                    public CountListener(Example owner)
+                    {
+                        owner.counts[Key] = 1;
+                    }
+
+                    public int Observed => 1;
+                }
+
+                private readonly Dictionary<string, int> counts = new();
+                private const string Key = "key";
+
+                int Run()
+                {
+                    if (counts.ContainsKey(Key))
+                    {
+                        var listener = new CountListener(this);
+                        return counts[Key] + listener.Observed;
+                    }
+
+                    return 0;
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task IgnoresTargetTypedNewBetweenLookups()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private sealed class CountListener
+                {
+                    public CountListener(Example owner)
+                    {
+                        owner.counts[Key] = 1;
+                    }
+
+                    public int Observed => 1;
+                }
+
+                private readonly Dictionary<string, int> counts = new();
+                private const string Key = "key";
+
+                int Run()
+                {
+                    if (counts.ContainsKey(Key))
+                    {
+                        CountListener listener = new(this);
+                        return counts[Key] + listener.Observed;
+                    }
+
+                    return 0;
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task IgnoresBareAwaitBetweenLookups()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+
+            class Example
+            {
+                private readonly Dictionary<string, int> counts = new();
+                private const string Key = "key";
+                private readonly Task pending = Task.CompletedTask;
+
+                async Task<int> RunAsync()
+                {
+                    if (counts.ContainsKey(Key))
+                    {
+                        await pending;
+                        return counts[Key];
+                    }
+
+                    return 0;
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task FixAllLeavesSuppressedMutationShapesUnchanged()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+
+            class Example
+            {
+                private sealed class CountListener
+                {
+                    public CountListener(Example owner)
+                    {
+                        owner.counts[Key] = 1;
+                    }
+
+                    public int Observed => 1;
+                }
+
+                private readonly Dictionary<string, int> counts = new();
+                private const string Key = "key";
+                private readonly Task pending = Task.CompletedTask;
+
+                int RunCreation()
+                {
+                    if (counts.ContainsKey(Key))
+                    {
+                        var listener = new CountListener(this);
+                        return counts[Key] + listener.Observed;
+                    }
+
+                    return 0;
+                }
+
+                int RunTargetTyped()
+                {
+                    if (counts.ContainsKey(Key))
+                    {
+                        CountListener listener = new(this);
+                        return counts[Key] + listener.Observed;
+                    }
+
+                    return 0;
+                }
+
+                async Task<int> RunAwaitAsync()
+                {
+                    if (counts.ContainsKey(Key))
+                    {
+                        await pending;
+                        return counts[Key];
+                    }
+
+                    return 0;
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(source, [], source, source);
+    }
+
+    [Fact]
+    public Task IgnoresConstructorKeyReassignmentThroughThis()
+    {
+        const string source = """
+            using System;
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private readonly Dictionary<string, int> map = new();
+                private readonly string name;
+
+                public Example(string other)
+                {
+                    name = other;
+                    if (map.ContainsKey(name))
+                    {
+                        this.name = other + "?";
+                        Console.WriteLine(map[name]);
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task IgnoresParenthesizedConstructorKeyReassignment()
+    {
+        const string source = """
+            using System;
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private readonly Dictionary<string, int> map = new();
+                private readonly string name;
+
+                public Example(string other)
+                {
+                    name = other;
+                    if (map.ContainsKey(name))
+                    {
+                        (name) = other + "?";
+                        Console.WriteLine(map[name]);
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task FixesConstLocalKeyDespiteSameNamedFieldWrite()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private readonly Dictionary<string, int> map = new();
+                private string name = "initial";
+
+                public void Run()
+                {
+                    const string name = "key";
+                    if (map.{|#0:ContainsKey|}(name))
+                    {
+                        this.name = name + "?";
+                        _ = map[name];
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private readonly Dictionary<string, int> map = new();
+                private string name = "initial";
+
+                public void Run()
+                {
+                    const string name = "key";
+                    if (map.TryGetValue(name, out var value))
+                    {
+                        this.name = name + "?";
+                        _ = value;
+                    }
+                }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(UseTryGetValueAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task FixesConstructorWithoutKeyReassignment()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private readonly Dictionary<string, int> map = new();
+                private readonly string name;
+
+                public Example(string other)
+                {
+                    name = other;
+                    if (map.{|#0:ContainsKey|}(name))
+                    {
+                        _ = map[name];
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private readonly Dictionary<string, int> map = new();
+                private readonly string name;
+
+                public Example(string other)
+                {
+                    name = other;
+                    if (map.TryGetValue(name, out var value))
+                    {
+                        _ = value;
+                    }
+                }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(UseTryGetValueAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task FixesDifferentInstanceKeyWrite()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            class Example
+            {
+                public sealed class Peer
+                {
+                    public string Name = "initial";
+                }
+
+                private readonly Dictionary<string, int> map = new();
+                private readonly string name = "initial";
+
+                public Example(Peer peer)
+                {
+                    if (map.{|#0:ContainsKey|}(name))
+                    {
+                        peer.Name = name + "?";
+                        _ = map[name];
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+
+            class Example
+            {
+                public sealed class Peer
+                {
+                    public string Name = "initial";
+                }
+
+                private readonly Dictionary<string, int> map = new();
+                private readonly string name = "initial";
+
+                public Example(Peer peer)
+                {
+                    if (map.TryGetValue(name, out var value))
+                    {
+                        peer.Name = name + "?";
+                        _ = value;
+                    }
+                }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(UseTryGetValueAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task KeepsCommentsInsideReplacedIndexerReads()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private readonly Dictionary<string, int> weights = new();
+                private const string Item = "item";
+
+                int Run()
+                {
+                    var total = 0;
+                    if (weights.{|#0:ContainsKey|}(Item))
+                    {
+                        total += weights[Item /* a */] - weights[ /* b */ Item];
+                    }
+
+                    return total;
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private readonly Dictionary<string, int> weights = new();
+                private const string Item = "item";
+
+                int Run()
+                {
+                    var total = 0;
+                    if (weights.TryGetValue(Item, out var value))
+                    {
+                        total += /* a */ value - /* b */ value;
+                    }
+
+                    return total;
+                }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(UseTryGetValueAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task KeepsCommentFromLastSeenIndexerRead()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private readonly Dictionary<string, int> weights = new();
+                private const string Item = "item";
+
+                int Run()
+                {
+                    var total = 0;
+                    if (weights.{|#0:ContainsKey|}(Item))
+                    {
+                        total += weights[Item /* last seen */];
+                    }
+
+                    return total;
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private readonly Dictionary<string, int> weights = new();
+                private const string Item = "item";
+
+                int Run()
+                {
+                    var total = 0;
+                    if (weights.TryGetValue(Item, out var value))
+                    {
+                        total += /* last seen */ value;
+                    }
+
+                    return total;
+                }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(UseTryGetValueAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
 }

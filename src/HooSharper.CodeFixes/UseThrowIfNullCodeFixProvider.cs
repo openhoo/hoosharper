@@ -51,7 +51,7 @@ public sealed class UseThrowIfNullCodeFixProvider : CodeFixProvider
             return document;
         }
 
-        var typeExpression = SyntaxFactory.ParseExpression(creation.Type.WithoutTrivia().ToString());
+        var typeExpression = creation.Type;
         var arguments = creation.ArgumentList!.Arguments;
         var invocation = SyntaxFactory.InvocationExpression(
             SyntaxFactory.MemberAccessExpression(
@@ -73,7 +73,8 @@ public sealed class UseThrowIfNullCodeFixProvider : CodeFixProvider
         var comments = ifStatement.DescendantTrivia(descendIntoTrivia: true)
             .Where(trivia => trivia.SpanStart >= ifStatement.SpanStart &&
                              trivia.Span.End <= ifStatement.Span.End &&
-                             trivia.SpanStart < throwStatement.SemicolonToken.Span.End &&
+                             !creation.Type.FullSpan.Contains(trivia.Span) &&
+                             !throwStatement.SemicolonToken.FullSpan.Contains(trivia.Span) &&
                              (trivia.IsKind(SyntaxKind.SingleLineCommentTrivia) ||
                               trivia.IsKind(SyntaxKind.MultiLineCommentTrivia)))
             .ToArray();

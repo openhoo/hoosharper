@@ -105,11 +105,45 @@ public sealed class UseDictionaryTryAddAnalyzerTests
                 {
                     var dictionary = new Dictionary<string, int>();
                     /* after condition */
+                    // opening brace
                     // before Add
                     // before Add
                     /* on Add */
                     dictionary.TryAdd(key, value); // after Add
                                                    // closing brace
+                }
+            }
+            """;
+        var expected = VerifyCS.Diagnostic(UseDictionaryTryAddAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task PreservesMultiLineCommentAfterOpenBraceForSoleAdd()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            class C
+            {
+                void M(string key, int value)
+                {
+                    var dictionary = new Dictionary<string, int>();
+                    if (!dictionary.{|#0:ContainsKey|}(key))
+                    { /* note */
+                        dictionary.Add(key, value);
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+            class C
+            {
+                void M(string key, int value)
+                {
+                    var dictionary = new Dictionary<string, int>();
+                    /* note */
+                    dictionary.TryAdd(key, value);
                 }
             }
             """;

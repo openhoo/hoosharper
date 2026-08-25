@@ -40,8 +40,7 @@ public sealed class UseStringContainsAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeComparison(SyntaxNodeAnalysisContext context)
     {
         var comparison = (BinaryExpressionSyntax)context.Node;
-        if (HasDirective(comparison) ||
-            !TryGetIndexOfInvocation(comparison, context.SemanticModel, context.CancellationToken, out var invocation) ||
+        if (!TryGetIndexOfInvocation(comparison, context.SemanticModel, context.CancellationToken, out var invocation) ||
             context.SemanticModel.GetOperation(comparison, context.CancellationToken) is not IBinaryOperation
             {
                 OperatorMethod: null,
@@ -56,7 +55,8 @@ public sealed class UseStringContainsAnalyzer : DiagnosticAnalyzer
                     ContainingType.SpecialType: SpecialType.System_String,
                 } indexOfMethod,
             } ||
-            !HasMatchingContainsOverload(indexOfMethod))
+            !HasMatchingContainsOverload(indexOfMethod) ||
+            HasDirective(comparison))
         {
             return;
         }

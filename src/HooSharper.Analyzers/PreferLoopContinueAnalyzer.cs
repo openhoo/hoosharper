@@ -80,13 +80,21 @@ public sealed class PreferLoopContinueAnalyzer : DiagnosticAnalyzer
 
             foreach (var node in loopBody.Statements[index].DescendantNodes())
             {
-                if (index < ifIndex)
+                var declared = GetDeclaredName(node);
+                if (declared is not null && introducedNames.Contains(declared))
                 {
-                    var name = GetDeclaredName(node);
-                    if (name is not null && introducedNames.Contains(name))
-                    {
-                        return true;
-                    }
+                    return true;
+                }
+
+                var used = node switch
+                {
+                    IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+                    GenericNameSyntax generic => generic.Identifier.ValueText,
+                    _ => null,
+                };
+                if (used is not null && introducedNames.Contains(used))
+                {
+                    return true;
                 }
 
                 if (node is LabeledStatementSyntax label &&

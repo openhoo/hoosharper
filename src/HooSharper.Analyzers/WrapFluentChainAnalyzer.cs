@@ -42,11 +42,11 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
         var memberAccess = (MemberAccessExpressionSyntax)context.Node;
         var chain = GetOutermostChain(memberAccess);
         if (GetLastMemberAccess(chain) != memberAccess ||
-            !HasStatementOrArrowAncestor(chain) ||
+            !HasStatementOrArrowAncestor(chain, out var isInInterpolation) ||
             HasDirective(chain) ||
             HasBoundaryOnLeftSpine(chain) ||
             !HasInvocation(chain, context) ||
-            !IsSupportedLanguageVersion(chain, context) ||
+            !IsSupportedLanguageVersion(chain, isInInterpolation, context) ||
             !TryGetChainDotCount(chain, out var dotCount) ||
             dotCount < 2)
         {
@@ -69,14 +69,17 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
         context.ReportDiagnostic(Diagnostic.Create(Rule, chain.GetLocation()));
     }
 
-    private static bool HasStatementOrArrowAncestor(SyntaxNode node)
+    private static bool HasStatementOrArrowAncestor(SyntaxNode node, out bool isInInterpolation)
     {
+        isInInterpolation = false;
         for (var current = node.Parent; current is not null; current = current.Parent)
         {
             if (current is StatementSyntax or ArrowExpressionClauseSyntax)
             {
                 return true;
             }
+
+            isInInterpolation |= current is InterpolationSyntax;
         }
 
         return false;
@@ -299,6 +302,7 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
 
     private static bool IsSupportedLanguageVersion(
         ExpressionSyntax chain,
+        bool isInInterpolation,
         SyntaxNodeAnalysisContext context)
     {
         if (context.Node.SyntaxTree.Options is not CSharpParseOptions { LanguageVersion: var languageVersion } ||
@@ -306,6 +310,11 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
             languageVersion >= LanguageVersion.CSharp11)
         {
             return true;
+        }
+
+        if (isInInterpolation)
+        {
+            return false;
         }
 
         ExpressionSyntax? current = chain;

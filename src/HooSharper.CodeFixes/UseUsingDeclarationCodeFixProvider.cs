@@ -37,9 +37,18 @@ public sealed class UseUsingDeclarationCodeFixProvider : CodeFixProvider
         context.RegisterCodeFix(
             CodeAction.Create(
                 "Use using declaration",
-                cancellationToken => ApplyFixAsync(context.Document, usingStatement, cancellationToken),
-                nameof(UseUsingDeclarationCodeFixProvider)),
+                createChangedSolution: cancellationToken => ApplyFixToSolutionAsync(context.Document, usingStatement, cancellationToken),
+                equivalenceKey: nameof(UseUsingDeclarationCodeFixProvider)),
             diagnostic);
+    }
+
+    private static async Task<Solution> ApplyFixToSolutionAsync(
+        Document document,
+        UsingStatementSyntax usingStatement,
+        CancellationToken cancellationToken)
+    {
+        var changedDocument = await ApplyFixAsync(document, usingStatement, cancellationToken).ConfigureAwait(false);
+        return changedDocument.Project.Solution;
     }
 
     private static async Task<Document> ApplyFixAsync(
@@ -94,57 +103,39 @@ public sealed class UseUsingDeclarationCodeFixProvider : CodeFixProvider
         for (var replacementIndex = 0; replacementIndex < replacements.Count; replacementIndex++)
         {
             replacements[replacementIndex] = replacements[replacementIndex]
-                .WithAdditionalAnnotations(Formatter.Annotation, replacementAnnotation);
+                .WithAdditionalAnnotations(replacementAnnotation);
         }
 
         var index = parentBlock.Statements.IndexOf(usingStatement);
         var replacementBlock = parentBlock.WithStatements(
             parentBlock.Statements.RemoveAt(index).InsertRange(index, replacements));
         var changedDocument = document.WithSyntaxRoot(root.ReplaceNode(parentBlock, replacementBlock));
+        var changedRoot = await changedDocument.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        if (changedRoot is null)
+        {
+            return changedDocument;
+        }
+
+        var affectedSpans = CollectAffectedLineBreakSpans(changedRoot, replacementAnnotation);
+        var formattedOptions = changedDocument.Project.Solution.Options.WithChangedOption(
+            FormattingOptions.NewLine,
+            LanguageNames.CSharp,
+            endOfLineText);
         var formattedDocument = await Formatter.FormatAsync(
                 changedDocument,
-                Formatter.Annotation,
-                cancellationToken: cancellationToken)
+                affectedSpans,
+                formattedOptions,
+                cancellationToken)
             .ConfigureAwait(false);
-        var formattedRoot = await formattedDocument.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-        if (formattedRoot is null)
-        {
-            return formattedDocument;
-        }
 
-        var formattedText = await formattedDocument.GetTextAsync(cancellationToken).ConfigureAwait(false);
-        var changes = new List<Microsoft.CodeAnalysis.Text.TextChange>();
-        for (var position = 0; position < formattedText.Length; position++)
-        {
-            var lineBreakLength = formattedText[position] switch
-            {
-                '\r' when position + 1 < formattedText.Length && formattedText[position + 1] == '\n' => 2,
-                '\r' or '\n' => 1,
-                _ => 0,
-            };
-            if (lineBreakLength == 0)
-            {
-                continue;
-            }
+        var normalizedDocument = await NormalizeFormattedLineEndingsAsync(
+            formattedDocument, replacementAnnotation, endOfLineText, cancellationToken).ConfigureAwait(false);
 
-            var token = formattedRoot.FindToken(position, findInsideTrivia: true);
-            var trivia = formattedRoot.FindTrivia(position, findInsideTrivia: true);
-            if (token.Span.Contains(position) ||
-                trivia.IsKind(SyntaxKind.DisabledTextTrivia) ||
-                trivia.IsDirective ||
-                formattedText.ToString(new Microsoft.CodeAnalysis.Text.TextSpan(position, lineBreakLength)) == endOfLineText)
-            {
-                position += lineBreakLength - 1;
-                continue;
-            }
-
-            changes.Add(new Microsoft.CodeAnalysis.Text.TextChange(
-                new Microsoft.CodeAnalysis.Text.TextSpan(position, lineBreakLength),
-                endOfLineText));
-            position += lineBreakLength - 1;
-        }
-
-        return formattedDocument.WithText(formattedText.WithChanges(changes));
+        // Pin the exact final text so downstream consumers cannot re-derive divergent
+        // line endings from the syntax tree under ambient formatting options.
+        var normalizedText = await normalizedDocument.GetTextAsync(cancellationToken).ConfigureAwait(false);
+        return normalizedDocument.WithText(Microsoft.CodeAnalysis.Text.SourceText.From(
+            normalizedText.ToString(), normalizedText.Encoding, normalizedText.ChecksumAlgorithm));
     }
     private static string DetectEndOfLine(Microsoft.CodeAnalysis.Text.SourceText sourceText)
     {
@@ -163,6 +154,122 @@ public sealed class UseUsingDeclarationCodeFixProvider : CodeFixProvider
 
         return "\r\n";
     }
+
+    private static List<Microsoft.CodeAnalysis.Text.TextSpan> CollectAffectedLineBreakSpans(
+        SyntaxNode root,
+        SyntaxAnnotation replacementAnnotation)
+    {
+        var spans = new List<Microsoft.CodeAnalysis.Text.TextSpan>();
+        var textEnd = root.FullSpan.End;
+        foreach (var annotatedNodeOrToken in root.GetAnnotatedNodesAndTokens(replacementAnnotation))
+        {
+            if (annotatedNodeOrToken.IsToken)
+            {
+                continue;
+            }
+
+            var fullSpan = annotatedNodeOrToken.FullSpan;
+            var start = fullSpan.Start;
+            var end = fullSpan.End;
+            while (start > 0 && TryGetEndOfLineTriviaAt(root, start - 1, out var leadingBreak))
+            {
+                start = leadingBreak.Span.Start;
+            }
+
+            while (end < textEnd && TryGetEndOfLineTriviaAt(root, end, out var trailingBreak))
+            {
+                end = trailingBreak.Span.End;
+            }
+
+            spans.Add(new Microsoft.CodeAnalysis.Text.TextSpan(start, end - start));
+        }
+
+        if (spans.Count == 0)
+        {
+            return spans;
+        }
+
+        spans.Sort(static (left, right) => left.Start != right.Start
+            ? left.Start.CompareTo(right.Start)
+            : left.End.CompareTo(right.End));
+        var merged = new List<Microsoft.CodeAnalysis.Text.TextSpan>(spans.Count) { spans[0] };
+        foreach (var span in spans.Skip(1))
+        {
+            var last = merged[merged.Count - 1];
+            if (span.Start <= last.End)
+            {
+                merged[merged.Count - 1] = span.End > last.End
+                    ? new Microsoft.CodeAnalysis.Text.TextSpan(last.Start, span.End - last.Start)
+                    : last;
+            }
+            else
+            {
+                merged.Add(span);
+            }
+        }
+
+        return merged;
+    }
+
+    private static bool TryGetEndOfLineTriviaAt(SyntaxNode root, int position, out SyntaxTrivia endOfLine)
+    {
+        var trivia = root.FindTrivia(position, findInsideTrivia: true);
+        if (trivia != default && trivia.IsKind(SyntaxKind.EndOfLineTrivia))
+        {
+            endOfLine = trivia;
+            return true;
+        }
+
+        endOfLine = default;
+        return false;
+    }
+
+    private static async Task<Document> NormalizeFormattedLineEndingsAsync(
+        Document document,
+        SyntaxAnnotation replacementAnnotation,
+        string endOfLineText,
+        CancellationToken cancellationToken)
+    {
+        var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root is null)
+        {
+            return document;
+        }
+
+        var annotatedSpans = root.GetAnnotatedNodesAndTokens(replacementAnnotation)
+            .Select(annotatedNodeOrToken => annotatedNodeOrToken.Span)
+            .ToList();
+        if (annotatedSpans.Count == 0)
+        {
+            return document;
+        }
+
+        var replacedRange = Microsoft.CodeAnalysis.Text.TextSpan.FromBounds(
+            annotatedSpans.Min(span => span.Start),
+            annotatedSpans.Max(span => span.End));
+        var foreignEndOfLines = new List<SyntaxTrivia>();
+        foreach (var trivia in root.DescendantTrivia(replacedRange, descendIntoTrivia: true))
+        {
+            if (IsForeignEndOfLine(trivia, endOfLineText))
+            {
+                foreignEndOfLines.Add(trivia);
+            }
+        }
+
+        if (foreignEndOfLines.Count == 0)
+        {
+            return document;
+        }
+
+        return document.WithSyntaxRoot(root.ReplaceTrivia(
+            foreignEndOfLines,
+            (_, rewritten) => IsForeignEndOfLine(rewritten, endOfLineText)
+                ? SyntaxFactory.EndOfLine(endOfLineText)
+                : rewritten));
+    }
+
+    private static bool IsForeignEndOfLine(SyntaxTrivia trivia, string endOfLineText) =>
+        trivia.IsKind(SyntaxKind.EndOfLineTrivia) && !trivia.ToFullString().Equals(endOfLineText);
 
     private static SyntaxTriviaList CommentLines(
         SyntaxTriviaList trivia,

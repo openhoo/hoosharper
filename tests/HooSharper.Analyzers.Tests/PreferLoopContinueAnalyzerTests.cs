@@ -773,4 +773,94 @@ public sealed class PreferLoopContinueAnalyzerTests
     }
 
 
+    [Fact]
+    public Task DoesNotReportWhenEarlierStatementUsesIntroducedName()
+    {
+        const string source = """
+            class Example
+            {
+                private int X = 1;
+
+                void Run(bool enabled)
+                {
+                    while (More())
+                    {
+                        X = 5;
+                        if (enabled)
+                        {
+                            var X = Compute();
+                            Use(X);
+                        }
+                    }
+                }
+
+                bool More() => true;
+                int Compute() => 0;
+                void Use(int value) { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task DoesNotReportWhenLaterSiblingUsesIntroducedName()
+    {
+        const string source = """
+            class Example
+            {
+                private int X = 1;
+
+                void Run(bool enabled)
+                {
+                    while (More())
+                    {
+                        if (enabled)
+                        {
+                            var X = Compute();
+                            Use(X);
+                        }
+
+                        X = 9;
+                    }
+                }
+
+                bool More() => true;
+                int Compute() => 0;
+                void Use(int value) { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task DoesNotReportWhenEarlierStatementUsesIntroducedLocalFunctionName()
+    {
+        const string source = """
+            class Example
+            {
+                static int G() => 1;
+
+                void Run(bool enabled)
+                {
+                    while (More())
+                    {
+                        Log(G());
+                        if (enabled)
+                        {
+                            int G() => 42;
+                            Emit(G());
+                        }
+                    }
+                }
+
+                bool More() => true;
+                void Log(int value) { }
+                void Emit(int value) { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
 }

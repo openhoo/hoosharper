@@ -40,4 +40,11 @@
     <None Include="../../docs/assets/hoosharper-logo.png" Pack="true" PackagePath="" />
   </ItemGroup>
 
+  <Target Name="EnsureCodeFixesBuiltForPack" BeforeTargets="GenerateNuspec">
+    <MSBuild Projects="..\HooSharper.CodeFixes\HooSharper.CodeFixes.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration)"
+             RemoveProperties="TargetFramework" />
+  </Target>
+
 </Project>

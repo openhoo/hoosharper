@@ -87,7 +87,7 @@ public sealed class SimplifyBooleanReturnCodeFixProvider : CodeFixProvider
     {
         var trivia = new List<SyntaxTrivia>();
         AddSignificantTrivia(trivia, ifStatement.DescendantTrivia().Where(item =>
-            !ifStatement.Condition.FullSpan.Contains(item.Span)));
+            !ifStatement.Condition.Span.Contains(item.Span)));
         AddSignificantTrivia(trivia, nextReturn.DescendantTrivia());
         return SyntaxFactory.TriviaList(WithLineBreaks(trivia));
     }

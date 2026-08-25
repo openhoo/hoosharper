@@ -59,8 +59,8 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context, INamedTypeSymbol exceptionType)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
-        if (ifStatement.Else is not null || HasDirective(ifStatement) ||
-            !TryGetThrowStatement(ifStatement.Statement, out var throwStatement) ||
+        if (ifStatement.Else is not null || !TryGetThrowStatement(ifStatement.Statement, out var throwStatement) ||
+            HasDirective(ifStatement) ||
             throwStatement.Expression is not ObjectCreationExpressionSyntax { Initializer: null } creation ||
             creation.ArgumentList is not { Arguments.Count: 1 } argumentList ||
             argumentList.Arguments[0].NameColon is not null ||
@@ -143,7 +143,7 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
         return false;
     }
     private static bool IsPointer(ExpressionSyntax expression, SyntaxNodeAnalysisContext context) =>
-        context.SemanticModel.GetTypeInfo(expression, context.CancellationToken).Type?.TypeKind == TypeKind.Pointer;
+        context.SemanticModel.GetTypeInfo(expression, context.CancellationToken).Type?.TypeKind is TypeKind.Pointer or TypeKind.FunctionPointer;
 
 
     private static bool IsMatchingNameOf(

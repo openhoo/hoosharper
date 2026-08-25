@@ -83,6 +83,7 @@ public sealed class UseDictionaryTryAddCodeFixProvider : CodeFixProvider
                 .AddRange(CommentLines(ifStatement.CloseParenToken.TrailingTrivia))
                 .AddRange(CommentLines(ifStatement.Condition.DescendantTrivia(descendIntoTrivia: true)))
                 .AddRange(CommentLines(block.OpenBraceToken.LeadingTrivia))
+                .AddRange(CommentLines(block.OpenBraceToken.TrailingTrivia))
                 .AddRange(addStatement.GetLeadingTrivia())
                 .AddRange(CommentLines(addInvocation.Expression.DescendantTrivia(descendIntoTrivia: true)));
             var trailingTrivia = InlineComments(addStatement.GetTrailingTrivia())

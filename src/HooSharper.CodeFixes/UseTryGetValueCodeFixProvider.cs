@@ -83,7 +83,13 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
         var dictionaryInterface = semanticModel.Compilation.GetTypeByMetadataName(
             "System.Collections.Generic.IDictionary`2");
         var matchingAccesses = new List<ElementAccessExpressionSyntax>();
-        if (MayMutateLookup(ifStatement.Statement, memberAccess.Expression, key))
+        if (MayMutateLookup(
+                ifStatement.Statement,
+                memberAccess.Expression,
+                key,
+                semanticModel,
+                keyOperation,
+                cancellationToken))
         {
             return document;
         }
@@ -123,7 +129,7 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
         var valueIdentifier = SyntaxFactory.IdentifierName(valueName);
         var updatedBody = ifStatement.Statement.ReplaceNodes(
             matchingAccesses,
-            (original, _) => valueIdentifier.WithTriviaFrom(original));
+            (original, _) => RewriteAccess(original, valueIdentifier));
 
         var tryGetValueMember = memberAccess.WithName(
             SyntaxFactory.IdentifierName("TryGetValue").WithTriviaFrom(memberAccess.Name));
@@ -142,6 +148,81 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
             .WithAdditionalAnnotations(Formatter.Annotation);
 
         return document.WithSyntaxRoot(root.ReplaceNode(ifStatement, updatedIf));
+    }
+
+    private static ExpressionSyntax RewriteAccess(
+        ElementAccessExpressionSyntax access,
+        IdentifierNameSyntax valueIdentifier)
+    {
+        var rewritten = valueIdentifier.WithTriviaFrom(access);
+        var internalTrivia = NormalizeInternalTrivia(CollectInternalTrivia(access));
+        if (internalTrivia.Count == 0)
+        {
+            return rewritten;
+        }
+
+        // Exactly one space separates migrated internal trivia from the value
+        // identifier unless an end-of-line or the surrounding whitespace already
+        // provides that separation.
+        var leading = rewritten.GetLeadingTrivia();
+        var updatedLeading = internalTrivia.AddRange(leading);
+        if (!internalTrivia[internalTrivia.Count - 1].IsKind(SyntaxKind.EndOfLineTrivia) &&
+            (leading.Count == 0 ||
+             (!leading[0].IsKind(SyntaxKind.WhitespaceTrivia) &&
+              !leading[0].IsKind(SyntaxKind.EndOfLineTrivia))))
+        {
+            updatedLeading = updatedLeading.Insert(internalTrivia.Count, SyntaxFactory.Space);
+        }
+
+        return rewritten.WithLeadingTrivia(updatedLeading);
+    }
+
+    private static SyntaxTriviaList CollectInternalTrivia(ElementAccessExpressionSyntax access)
+    {
+        var internalTrivia = SyntaxFactory.TriviaList();
+        var tokens = access.DescendantTokens().ToList();
+        if (tokens.Count < 2)
+        {
+            return internalTrivia;
+        }
+
+        // The first token's leading trivia is the access's own leading trivia and the last
+        // token's trailing trivia its own trailing trivia; both are migrated by WithTriviaFrom.
+        for (var index = 0; index < tokens.Count - 1; index++)
+        {
+            internalTrivia = internalTrivia.AddRange(tokens[index].TrailingTrivia);
+            internalTrivia = internalTrivia.AddRange(tokens[index + 1].LeadingTrivia);
+        }
+
+        return internalTrivia;
+    }
+
+    private static SyntaxTriviaList NormalizeInternalTrivia(SyntaxTriviaList internalTrivia)
+    {
+        var startIndex = 0;
+        var endIndex = internalTrivia.Count - 1;
+        while (startIndex <= endIndex && internalTrivia[startIndex].IsKind(SyntaxKind.WhitespaceTrivia))
+        {
+            startIndex++;
+        }
+
+        while (endIndex >= startIndex && internalTrivia[endIndex].IsKind(SyntaxKind.WhitespaceTrivia))
+        {
+            endIndex--;
+        }
+
+        if (startIndex > endIndex)
+        {
+            return SyntaxFactory.TriviaList();
+        }
+
+        var normalized = SyntaxFactory.TriviaList();
+        for (var index = startIndex; index <= endIndex; index++)
+        {
+            normalized = normalized.Add(internalTrivia[index]);
+        }
+
+        return normalized;
     }
 
     private static string CreateUniqueName(
@@ -376,7 +457,10 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
     private static bool MayMutateLookup(
         StatementSyntax statement,
         ExpressionSyntax dictionary,
-        ExpressionSyntax key)
+        ExpressionSyntax key,
+        SemanticModel semanticModel,
+        IOperation? keyOperation,
+        CancellationToken cancellationToken)
     {
         foreach (var node in statement.DescendantNodes(ShouldDescendInto))
         {
@@ -384,7 +468,8 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
                 (assignment.Left is ElementAccessExpressionSyntax ||
                  IsSameExpression(assignment.Left, dictionary) ||
                  IsSameExpression(assignment.Left, key) ||
-                 IsDictionaryIndexer(assignment.Left, dictionary)))
+                 IsDictionaryIndexer(assignment.Left, dictionary) ||
+                 WritesKeyLocation(assignment.Left, key, keyOperation, semanticModel, cancellationToken)))
             {
                 return true;
             }
@@ -403,12 +488,13 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
                 (mutatedOperand is ElementAccessExpressionSyntax ||
                  IsSameExpression(mutatedOperand, dictionary) ||
                  IsSameExpression(mutatedOperand, key) ||
-                 IsDictionaryIndexer(mutatedOperand, dictionary)))
+                 IsDictionaryIndexer(mutatedOperand, dictionary) ||
+                 WritesKeyLocation(mutatedOperand, key, keyOperation, semanticModel, cancellationToken)))
             {
                 return true;
             }
 
-            if (node is InvocationExpressionSyntax)
+            if (node is InvocationExpressionSyntax or ObjectCreationExpressionSyntax or ImplicitObjectCreationExpressionSyntax or AwaitExpressionSyntax)
             {
                 return true;
             }
@@ -416,6 +502,86 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
 
         return false;
     }
+
+    private static bool WritesKeyLocation(
+        ExpressionSyntax target,
+        ExpressionSyntax key,
+        IOperation? keyOperation,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken)
+    {
+        while (target is ParenthesizedExpressionSyntax parenthesizedTarget)
+        {
+            target = parenthesizedTarget.Expression;
+        }
+
+        while (key is ParenthesizedExpressionSyntax parenthesizedKey)
+        {
+            key = parenthesizedKey.Expression;
+        }
+
+        if (IsSameExpression(target, key))
+        {
+            return true;
+        }
+
+        if (target is not MemberAccessExpressionSyntax
+            {
+                Expression: ThisExpressionSyntax,
+                Name: IdentifierNameSyntax memberName,
+            } ||
+            key is not IdentifierNameSyntax keyIdentifier ||
+            keyIdentifier.Identifier.ValueText != memberName.Identifier.ValueText)
+        {
+            return false;
+        }
+
+        var targetRoot = Unwrap(semanticModel.GetOperation(target, cancellationToken));
+
+        return ReferenceChainsMatch(targetRoot, keyOperation);
+    }
+
+    private static bool ReferenceChainsMatch(IOperation? left, IOperation? right)
+    {
+        while (true)
+        {
+            if (left is null || right is null)
+            {
+                return left is null && right is null;
+            }
+
+            if (left is IInstanceReferenceOperation || right is IInstanceReferenceOperation)
+            {
+                return left is IInstanceReferenceOperation && right is IInstanceReferenceOperation;
+            }
+
+            var leftMember = GetReferencedMember(left);
+            if (leftMember is null ||
+                !SymbolEqualityComparer.Default.Equals(leftMember, GetReferencedMember(right)))
+            {
+                return false;
+            }
+
+            left = GetReceiverInstance(left);
+            right = GetReceiverInstance(right);
+        }
+    }
+
+    private static ISymbol? GetReferencedMember(IOperation operation) => operation switch
+    {
+        IFieldReferenceOperation field => field.Field,
+        IPropertyReferenceOperation property => property.Property,
+        ILocalReferenceOperation local => local.Local,
+        IParameterReferenceOperation parameter => parameter.Parameter,
+        _ => null,
+    };
+
+    private static IOperation? GetReceiverInstance(IOperation operation) => operation switch
+    {
+        IFieldReferenceOperation field => field.Instance,
+        IPropertyReferenceOperation property => property.Instance,
+        _ => null,
+    };
 
     private static bool IsSameExpression(ExpressionSyntax first, ExpressionSyntax second) =>
         SyntaxFactory.AreEquivalent(first, second);

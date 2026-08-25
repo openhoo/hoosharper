@@ -79,6 +79,7 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
         var negatedPattern = SyntaxFactory.UnaryPattern(notKeyword, pattern.WithLeadingTrivia(SyntaxFactory.Space));
         var trailingTrivia = EnsureCommentLineBreaks(
             GetOriginalPattern(logicalNot).GetTrailingTrivia()
+                .AddRange(parenthesized.CloseParenToken.LeadingTrivia)
                 .AddRange(logicalNot.GetTrailingTrivia()));
         return SyntaxFactory.IsPatternExpression(target.WithoutLeadingTrivia(), isKeyword, negatedPattern)
             .WithLeadingTrivia(logicalNot.GetLeadingTrivia().AddRange(removedTokenTrivia))

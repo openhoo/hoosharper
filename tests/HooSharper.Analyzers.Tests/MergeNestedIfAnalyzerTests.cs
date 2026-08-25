@@ -236,6 +236,163 @@ public sealed class MergeNestedIfAnalyzerTests
     }
 
     [Fact]
+    public Task PreservesCommentAboveUnbracedInnermostStatement()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled, bool ready)
+                {
+                    {|#0:if|} (enabled)
+                    {
+                        if (ready)
+                            // hot path only
+                            Execute();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool enabled, bool ready)
+                {
+                    // hot path only
+                    if (enabled && ready)
+                        Execute();
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(MergeNestedIfAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task PreservesCommentAboveKeptBlockOpenBrace()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled, bool ready)
+                {
+                    {|#0:if|} (enabled)
+                    {
+                        if (ready)
+                            // prepare state
+                        {
+                            DoWork();
+                        }
+                    }
+                }
+
+                void DoWork() { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool enabled, bool ready)
+                {
+                    // prepare state
+                    if (enabled && ready)
+                    {
+                        DoWork();
+                    }
+                }
+
+                void DoWork() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(MergeNestedIfAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task PreservesCommentsAboveIntermediateIfInDeepChain()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool first, bool second, bool third)
+                {
+                    {|#0:if|} (first)
+                    {
+                        if (second)
+                        {
+                            // mid guard
+                            if (third)
+                                Execute();
+                        }
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool first, bool second, bool third)
+                {
+                    // mid guard
+                    if (first && second && third)
+                        Execute();
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(MergeNestedIfAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task DoesNotDuplicateInteriorCommentOfKeptBlock()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled, bool ready)
+                {
+                    {|#0:if|} (enabled)
+                    {
+                        if (ready)
+                        {
+                            Execute(); // action
+                        }
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool enabled, bool ready)
+                {
+                    if (enabled && ready)
+                    {
+                        Execute(); // action
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(MergeNestedIfAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
     public Task DoesNotReportElseOrUnbracedOuterOrMultipleStatements()
     {
         const string source = """
@@ -648,6 +805,155 @@ public sealed class MergeNestedIfAnalyzerTests
             """;
 
         return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task SuppressesMergeWhenHoistedPatternVariableCollidesWithSiblingCatchParameter()
+    {
+        const string source = """
+            using System;
+
+            class Example
+            {
+                void Run(object o)
+                {
+                    if (o is string s)
+                    {
+                        if (o is Exception ex)
+                            Log(ex);
+                    }
+                    try { }
+                    catch (Exception ex) { Log(ex); }
+                }
+
+                void Log(object o) { }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(source, Array.Empty<DiagnosticResult>(), source);
+    }
+
+    [Fact]
+    public Task StillMergesWhenSiblingCatchUsesDifferentName()
+    {
+        const string source = """
+            using System;
+
+            class Example
+            {
+                void Run(object o)
+                {
+                    {|#0:if|} (o is string s)
+                    {
+                        if (o is Exception ex)
+                            Log(ex);
+                    }
+                    try { }
+                    catch (InvalidOperationException other) { Log(other); }
+                }
+
+                void Log(object o) { }
+            }
+            """;
+        const string fixedSource = """
+            using System;
+
+            class Example
+            {
+                void Run(object o)
+                {
+                    if (o is string s && o is Exception ex)
+                        Log(ex);
+                    try { }
+                    catch (InvalidOperationException other) { Log(other); }
+                }
+
+                void Log(object o) { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(MergeNestedIfAnalyzer.DiagnosticId)
+            .WithLocation(0)
+            .WithMessage("Merge these nested if statements");
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task DoesNotReportWhenEmbeddedDesignationWouldCollideWithCaseSectionLocal()
+    {
+        const string source = """
+            using System;
+
+            class Example
+            {
+                void Run(int key, object o)
+                {
+                    switch (key)
+                    {
+                        case 1:
+                            if (o is string s)
+                            {
+                                if (o is Exception ex)
+                                    Log(ex);
+                            }
+                            break;
+                        case 2:
+                            {
+                                int ex = 0;
+                                Log(ex);
+                            }
+                            break;
+                    }
+                }
+
+                void Log(object o) { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task MergesWhileEmbeddedIfWithInnerDesignationWhenNothingCollides()
+    {
+        const string source = """
+            using System;
+
+            class Example
+            {
+                void Run(bool repeat, object item)
+                {
+                    while (repeat)
+                        {|#0:if|} (item is not null)
+                        {
+                            if (item is Exception ex)
+                                Log(ex);
+                        }
+                }
+
+                void Log(object o) { }
+            }
+            """;
+        const string fixedSource = """
+            using System;
+
+            class Example
+            {
+                void Run(bool repeat, object item)
+                {
+                    while (repeat)
+                        if (item is not null && item is Exception ex)
+                            Log(ex);
+                }
+
+                void Log(object o) { }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(MergeNestedIfAnalyzer.DiagnosticId)
+            .WithLocation(0)
+            .WithMessage("Merge these nested if statements");
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
     }
 
 }

@@ -581,6 +581,37 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
     }
 
     [Fact]
+    public Task PreservesCommentBeforeClosingBrace()
+    {
+        const string source = """
+            class Example
+            {
+                void Set(string? value, string fallback)
+                {
+                    if (value {|#0:is|} null)
+                    {
+                        value = fallback;
+                        // created lazily
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Set(string? value, string fallback)
+                {
+                    // created lazily
+                    value ??= fallback;
+                }
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
     public Task ReplacesFieldOnStableReadonlyReceiver()
     {
         const string source = """

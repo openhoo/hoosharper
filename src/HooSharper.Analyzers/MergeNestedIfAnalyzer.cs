@@ -66,17 +66,6 @@ public sealed class MergeNestedIfAnalyzer : DiagnosticAnalyzer
 
     private static bool IntroducesDeclarationCollision(IfStatementSyntax outerIf)
     {
-        if (outerIf.Parent is not BlockSyntax containingBlock)
-        {
-            return false;
-        }
-
-        var outerIndex = containingBlock.Statements.IndexOf(outerIf);
-        if (outerIndex < 0)
-        {
-            return false;
-        }
-
         var introducedNames = new HashSet<string>();
         var current = outerIf;
         while (TryGetInnerIf(current, out var innerIf))
@@ -97,20 +86,64 @@ public sealed class MergeNestedIfAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        for (var statementIndex = 0; statementIndex < containingBlock.Statements.Count; statementIndex++)
+        if (outerIf.Parent is BlockSyntax containingBlock)
         {
-            if (statementIndex == outerIndex)
+            var outerIndex = containingBlock.Statements.IndexOf(outerIf);
+            if (outerIndex < 0)
             {
-                continue;
+                return false;
             }
 
-            foreach (var node in containingBlock.Statements[statementIndex].DescendantNodesAndSelf())
+            for (var statementIndex = 0; statementIndex < containingBlock.Statements.Count; statementIndex++)
             {
+                if (statementIndex == outerIndex)
+                {
+                    continue;
+                }
+
+                foreach (var node in containingBlock.Statements[statementIndex].DescendantNodesAndSelf())
+                {
+                    var name = node switch
+                    {
+                        VariableDeclaratorSyntax declaration => declaration.Identifier.ValueText,
+                        SingleVariableDesignationSyntax designation => designation.Identifier.ValueText,
+                        ForEachStatementSyntax forEachStatement => forEachStatement.Identifier.ValueText,
+                        CatchDeclarationSyntax catchDeclaration => catchDeclaration.Identifier.ValueText,
+                        LocalFunctionStatementSyntax localFunction => localFunction.Identifier.ValueText,
+                        _ => null,
+                    };
+
+                    if (name is not null && introducedNames.Contains(name))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        var enclosingBlock = outerIf.FirstAncestorOrSelf<BlockSyntax>();
+        if (enclosingBlock is null)
+        {
+            return true;
+        }
+
+        foreach (var statement in enclosingBlock.Statements)
+        {
+            foreach (var node in statement.DescendantNodesAndSelf())
+            {
+                if (outerIf.FullSpan.Contains(node.Span))
+                {
+                    continue;
+                }
+
                 var name = node switch
                 {
                     VariableDeclaratorSyntax declaration => declaration.Identifier.ValueText,
                     SingleVariableDesignationSyntax designation => designation.Identifier.ValueText,
                     ForEachStatementSyntax forEachStatement => forEachStatement.Identifier.ValueText,
+                    CatchDeclarationSyntax catchDeclaration => catchDeclaration.Identifier.ValueText,
                     LocalFunctionStatementSyntax localFunction => localFunction.Identifier.ValueText,
                     _ => null,
                 };

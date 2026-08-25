@@ -92,7 +92,7 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
             .WithCloseParenToken(outerIf.CloseParenToken.WithTrailingTrivia())
             .WithStatement(mergedStatement)
             .WithElse(null)
-            .WithLeadingTrivia(PreserveRemovedComments(outerIf, innerIf))
+            .WithLeadingTrivia(PreserveRemovedComments(outerIf, innerIf, deepestIf))
             .WithTrailingTrivia(outerIf.GetTrailingTrivia())
             .WithAdditionalAnnotations(Formatter.Annotation);
 
@@ -122,7 +122,7 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
             LambdaExpressionSyntax or AnonymousMethodExpressionSyntax or QueryExpressionSyntax;
     }
 
-    private static SyntaxTriviaList PreserveRemovedComments(IfStatementSyntax outerIf, IfStatementSyntax innerIf)
+    private static SyntaxTriviaList PreserveRemovedComments(IfStatementSyntax outerIf, IfStatementSyntax innerIf, IfStatementSyntax deepestIf)
     {
         var leading = outerIf.GetLeadingTrivia();
         var indentation = SyntaxFactory.TriviaList(
@@ -132,9 +132,16 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
                 IsComment(trivia) &&
                 !outerIf.Condition.Span.Contains(trivia.Span) &&
                 !innerIf.Condition.Span.Contains(trivia.Span) &&
-                !innerIf.Statement.FullSpan.Contains(trivia.Span));
+                !deepestIf.Statement.FullSpan.Contains(trivia.Span));
 
         foreach (var comment in comments)
+        {
+            leading = leading.Add(comment);
+            leading = leading.Add(SyntaxFactory.ElasticCarriageReturnLineFeed);
+            leading = leading.AddRange(indentation);
+        }
+
+        foreach (var comment in deepestIf.Statement.GetLeadingTrivia().Where(IsComment))
         {
             leading = leading.Add(comment);
             leading = leading.Add(SyntaxFactory.ElasticCarriageReturnLineFeed);

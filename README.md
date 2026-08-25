@@ -314,7 +314,7 @@ All rules below use category `HooSharper.CodeStyle`, default to Info severity, a
 | ID | Rule | Example |
 |---|---|---|
 | `HOO1003` | Remove a redundant `else` after a terminating branch | `if (!valid) return; else Work();` → `if (!valid) return; Work();` |
-| `HOO1004` | Replace a final nested loop condition with an early `continue` | `if (valid) { Work(); }` → `if (!valid) continue; Work();` |
+| `HOO1004` | Prefer an early `continue` when a final `if` wraps the remaining loop body | `if (valid) { Work(); }` → `if (!valid) continue; Work();` |
 | `HOO1005` | Combine an `as` cast and null check into a type pattern | `var x = value as T; if (x is not null)` → `if (value is T x)` |
 | `HOO1006` | Simplify comparisons with boolean literals | `ready == false` → `!ready` |
 | `HOO1007` | Replace `ContainsKey` plus index access with `TryGetValue` | `map.ContainsKey(key)` and `map[key]` → `map.TryGetValue(key, out var value)` |
@@ -523,6 +523,7 @@ Compare performance using the same benchmark sources, SDK, build configuration, 
 analyzers/dotnet/cs/HooSharper.Analyzers.dll
 analyzers/dotnet/cs/HooSharper.CodeFixes.dll
 README.md
+hoosharper-logo.png
 ```
 
 The analyzer assembly is loaded by the compiler and IDE. The code-fix assembly is used by IDE hosts that discover Roslyn code-fix providers. Neither assembly is a runtime application dependency.

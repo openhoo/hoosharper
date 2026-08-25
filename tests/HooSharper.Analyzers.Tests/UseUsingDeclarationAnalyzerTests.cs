@@ -409,7 +409,7 @@ public sealed class UseUsingDeclarationAnalyzerTests
                 }
             }
             """".ReplaceLineEndings("\r\n");
-        source = source.Replace("\r\n                    string raw", "\n                    string raw");
+        source = source.Replace("\r\n        string raw", "\n        string raw");
 
         var fixedSource = """"
             using System;
@@ -435,7 +435,7 @@ public sealed class UseUsingDeclarationAnalyzerTests
                 }
             }
             """".ReplaceLineEndings("\r\n");
-        fixedSource = fixedSource.Replace("\r\n                    string raw", "\n                    string raw");
+        fixedSource = fixedSource.Replace("\r\n        string raw", "\n        string raw");
 
         var expected = VerifyCS.Diagnostic(UseUsingDeclarationAnalyzer.DiagnosticId).WithLocation(0);
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
@@ -589,6 +589,43 @@ public sealed class UseUsingDeclarationAnalyzerTests
                 }
             }
             """.ReplaceLineEndings("\r\n");
+
+        var expected = VerifyCS.Diagnostic(UseUsingDeclarationAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public Task DoesNotNormalizeEolOutsideFixedSpan()
+    {
+        var source = """
+            using System.IO;
+
+            class Example
+            {
+                void Run()
+                {
+                    {|#0:using|} (var stream = new MemoryStream())
+                    {
+                        stream.WriteByte(1);
+                    }
+                }
+            }
+            """.ReplaceLineEndings("\r\n");
+        source = source.Replace("\r\n    void Run()", "\n    void Run()");
+
+        var fixedSource = """
+            using System.IO;
+
+            class Example
+            {
+                void Run()
+                {
+                    using var stream = new MemoryStream();
+                    stream.WriteByte(1);
+                }
+            }
+            """.ReplaceLineEndings("\r\n");
+        fixedSource = fixedSource.Replace("\r\n    void Run()", "\n    void Run()");
 
         var expected = VerifyCS.Diagnostic(UseUsingDeclarationAnalyzer.DiagnosticId).WithLocation(0);
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);

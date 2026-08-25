@@ -77,6 +77,99 @@ public sealed class SimplifyBooleanReturnAnalyzerTests
     }
 
     [Fact]
+    public Task PreservesLeadingConditionEdgeComment()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(bool ready)
+                {
+                    {|#0:if|} (/* always audit */ ready)
+                        return false;
+                    return true;
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                bool Run(bool ready)
+                {
+                    return !ready;
+                    /* always audit */
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(SimplifyBooleanReturnAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
+
+    [Fact]
+    public Task PreservesTrailingConditionEdgeComment()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(bool ready)
+                {
+                    {|#0:if|} (ready /* always audit */)
+                        return false;
+                    return true;
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                bool Run(bool ready)
+                {
+                    return !ready;
+                    /* always audit */
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(SimplifyBooleanReturnAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
+
+    [Fact]
+    public Task PreservesConditionEdgeCommentForPositiveBranch()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(bool flag)
+                {
+                    {|#0:if|} (/* note */ flag)
+                        return true;
+                    return false;
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                bool Run(bool flag)
+                {
+                    return flag;
+                    /* note */
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(SimplifyBooleanReturnAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
+
+    [Fact]
     public Task RemovesExistingNegationForInversePolarity()
     {
         const string source = """

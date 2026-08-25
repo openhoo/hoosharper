@@ -99,7 +99,13 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        if (MayMutateLookup(ifStatement.Statement, memberAccess.Expression, key))
+        if (MayMutateLookup(
+                ifStatement.Statement,
+                memberAccess.Expression,
+                key,
+                context.SemanticModel,
+                keyOperation,
+                context.CancellationToken))
         {
             return;
         }
@@ -346,7 +352,10 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
     private static bool MayMutateLookup(
         StatementSyntax statement,
         ExpressionSyntax dictionary,
-        ExpressionSyntax key)
+        ExpressionSyntax key,
+        SemanticModel semanticModel,
+        IOperation? keyOperation,
+        System.Threading.CancellationToken cancellationToken)
     {
         foreach (var node in statement.DescendantNodes(ShouldDescendInto))
         {
@@ -354,7 +363,8 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
                 (assignment.Left is ElementAccessExpressionSyntax ||
                  ContainsMatchingDictionaryIndexer(assignment.Left, dictionary, key) ||
                  IsSameExpression(assignment.Left, dictionary) ||
-                 IsSameExpression(assignment.Left, key)))
+                 IsSameExpression(assignment.Left, key) ||
+                 WritesKeyLocation(assignment.Left, key, keyOperation, semanticModel, cancellationToken)))
             {
                 return true;
             }
@@ -372,12 +382,13 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
                 (mutatedOperand is ElementAccessExpressionSyntax ||
                  IsSameExpression(mutatedOperand, dictionary) ||
                  IsSameExpression(mutatedOperand, key) ||
-                 IsDictionaryIndexer(mutatedOperand, dictionary)))
+                 IsDictionaryIndexer(mutatedOperand, dictionary) ||
+                 WritesKeyLocation(mutatedOperand, key, keyOperation, semanticModel, cancellationToken)))
             {
                 return true;
             }
 
-            if (node is InvocationExpressionSyntax)
+            if (node is InvocationExpressionSyntax or ObjectCreationExpressionSyntax or ImplicitObjectCreationExpressionSyntax or AwaitExpressionSyntax)
             {
                 return true;
             }
@@ -385,6 +396,86 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
 
         return false;
     }
+
+    private static bool WritesKeyLocation(
+        ExpressionSyntax target,
+        ExpressionSyntax key,
+        IOperation? keyOperation,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        while (target is ParenthesizedExpressionSyntax parenthesizedTarget)
+        {
+            target = parenthesizedTarget.Expression;
+        }
+
+        while (key is ParenthesizedExpressionSyntax parenthesizedKey)
+        {
+            key = parenthesizedKey.Expression;
+        }
+
+        if (IsSameExpression(target, key))
+        {
+            return true;
+        }
+
+        if (target is not MemberAccessExpressionSyntax
+            {
+                Expression: ThisExpressionSyntax,
+                Name: IdentifierNameSyntax memberName,
+            } ||
+            key is not IdentifierNameSyntax keyIdentifier ||
+            keyIdentifier.Identifier.ValueText != memberName.Identifier.ValueText)
+        {
+            return false;
+        }
+
+        var targetRoot = Unwrap(semanticModel.GetOperation(target, cancellationToken));
+
+        return ReferenceChainsMatch(targetRoot, keyOperation);
+    }
+
+    private static bool ReferenceChainsMatch(IOperation? left, IOperation? right)
+    {
+        while (true)
+        {
+            if (left is null || right is null)
+            {
+                return left is null && right is null;
+            }
+
+            if (left is IInstanceReferenceOperation || right is IInstanceReferenceOperation)
+            {
+                return left is IInstanceReferenceOperation && right is IInstanceReferenceOperation;
+            }
+
+            var leftMember = GetReferencedMember(left);
+            if (leftMember is null ||
+                !SymbolEqualityComparer.Default.Equals(leftMember, GetReferencedMember(right)))
+            {
+                return false;
+            }
+
+            left = GetReceiverInstance(left);
+            right = GetReceiverInstance(right);
+        }
+    }
+
+    private static ISymbol? GetReferencedMember(IOperation operation) => operation switch
+    {
+        IFieldReferenceOperation field => field.Field,
+        IPropertyReferenceOperation property => property.Property,
+        ILocalReferenceOperation local => local.Local,
+        IParameterReferenceOperation parameter => parameter.Parameter,
+        _ => null,
+    };
+
+    private static IOperation? GetReceiverInstance(IOperation operation) => operation switch
+    {
+        IFieldReferenceOperation field => field.Instance,
+        IPropertyReferenceOperation property => property.Instance,
+        _ => null,
+    };
 
     private static bool ContainsMatchingDictionaryIndexer(
         ExpressionSyntax target,

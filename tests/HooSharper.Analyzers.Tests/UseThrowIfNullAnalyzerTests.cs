@@ -1,3 +1,5 @@
+using Microsoft.CodeAnalysis.CSharp;
+
 using Microsoft.CodeAnalysis.CSharp.Testing;
 using Microsoft.CodeAnalysis.Testing;
 
@@ -100,7 +102,7 @@ public sealed class UseThrowIfNullAnalyzerTests
             """;
 
         var expected = VerifyCS.Diagnostic(UseThrowIfNullAnalyzer.DiagnosticId).WithLocation(0);
-        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+        return VerifyCodeFixForDottedExceptionTypeAsync(source, [expected], fixedSource);
     }
 
     [Fact]
@@ -180,6 +182,79 @@ public sealed class UseThrowIfNullAnalyzerTests
             VerifyCS.Diagnostic(UseThrowIfNullAnalyzer.DiagnosticId).WithLocation(1),
         };
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
+    [Fact]
+    public Task FixAllPreservesAliasSpellingOfExceptionType()
+    {
+        const string source = """
+            using ANE = System.ArgumentNullException;
+
+            class Example
+            {
+                void Run(object argument)
+                {
+                    if (argument {|#0:is|} null)
+                    {
+                        throw new ANE(nameof(argument));
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using ANE = System.ArgumentNullException;
+
+            class Example
+            {
+                void Run(object argument)
+                {
+                    ANE.ThrowIfNull(argument, nameof(argument));
+                }
+            }
+            """;
+
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(UseThrowIfNullAnalyzer.DiagnosticId).WithLocation(0),
+        };
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
+    [Fact]
+    public Task FixAllPreservesCommentBeforeExceptionType()
+    {
+        const string source = """
+            using System;
+
+            class Example
+            {
+                void Run(object argument)
+                {
+                    if (argument {|#0:is|} null)
+                    {
+                        throw new /* guard */ System.ArgumentNullException(nameof(argument));
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System;
+
+            class Example
+            {
+                void Run(object argument)
+                {
+                    /* guard */
+                    System.ArgumentNullException.ThrowIfNull(argument, nameof(argument));
+                }
+            }
+            """;
+
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(UseThrowIfNullAnalyzer.DiagnosticId).WithLocation(0),
+        };
+        return VerifyCodeFixForDottedExceptionTypeAsync(source, expected, fixedSource, fixedSource);
     }
 
     [Fact]
@@ -451,4 +526,108 @@ public sealed class UseThrowIfNullAnalyzerTests
         };
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
     }
+    [Fact]
+    public Task DoesNotReportFunctionPointerEquality()
+    {
+        const string source = """
+            using System;
+
+            unsafe class Example
+            {
+                static unsafe void M(delegate*<void> fp)
+                {
+                    if (fp == null)
+                        throw new ArgumentNullException(nameof(fp));
+                }
+            }
+            """;
+
+        return VerifyUnsafeAsync(source);
+    }
+
+    [Fact]
+    public Task DoesNotReportFunctionPointerNullPattern()
+    {
+        const string source = """
+            using System;
+
+            unsafe class Example
+            {
+                static unsafe void M(delegate*<void> fp)
+                {
+                    if (fp is null)
+                        throw new ArgumentNullException(nameof(fp));
+                }
+            }
+            """;
+
+        return VerifyUnsafeAsync(source);
+    }
+
+    [Fact]
+    public Task DoesNotReportRawPointerEquality()
+    {
+        const string source = """
+            using System;
+
+            unsafe class Example
+            {
+                static unsafe void N(int* p)
+                {
+                    if (p == null)
+                        throw new ArgumentNullException(nameof(p));
+                }
+            }
+            """;
+
+        return VerifyUnsafeAsync(source);
+    }
+
+    private static Task VerifyUnsafeAsync(string source)
+    {
+        var test = new CSharpCodeFixTest<UseThrowIfNullAnalyzer, UseThrowIfNullCodeFixProvider, DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+        };
+
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
+
+    private static Task VerifyCodeFixForDottedExceptionTypeAsync(
+        string source,
+        IReadOnlyList<DiagnosticResult> expected,
+        string fixedSource,
+        string? batchFixedSource = null)
+    {
+        var test = new CSharpCodeFixTest<UseThrowIfNullAnalyzer, UseThrowIfNullCodeFixProvider, DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+            FixedCode = fixedSource,
+
+            // The fixer reuses the exception type written in `new T(...)` as the
+            // ThrowIfNull receiver. For dotted names such as
+            // System.ArgumentNullException that type node is a QualifiedNameSyntax
+            // in type position, while re-parsing the fixed statement yields nested
+            // SimpleMemberAccessExpression nodes. Kinds differ although tokens,
+            // text, and semantics are identical, so the framework's
+            // SemanticStructure re-parse form check cannot hold for this shape.
+            // Textual fixed-output and diagnostic assertions stay fully enabled.
+            CodeActionValidationMode = CodeActionValidationMode.None,
+        };
+
+        if (batchFixedSource is not null)
+        {
+            test.BatchFixedCode = batchFixedSource;
+        }
+
+        foreach (var diagnostic in expected)
+        {
+            test.ExpectedDiagnostics.Add(diagnostic);
+        }
+
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
+
 }

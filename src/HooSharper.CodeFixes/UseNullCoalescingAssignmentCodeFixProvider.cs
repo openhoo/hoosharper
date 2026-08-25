@@ -9,6 +9,7 @@ using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Formatting;
 
 namespace HooSharper.CodeFixes;
 
@@ -66,6 +67,7 @@ public sealed class UseNullCoalescingAssignmentCodeFixProvider : CodeFixProvider
             .AddRange(CommentLines(block.OpenBraceToken.LeadingTrivia))
             .AddRange(CommentLines(block.OpenBraceToken.TrailingTrivia))
             .AddRange(CommentLines(assignmentStatement.GetLeadingTrivia()))
+            .AddRange(CommentLines(block.CloseBraceToken.LeadingTrivia))
             .AddRange(CommentLines(block.CloseBraceToken.TrailingTrivia));
         var trailingTrivia = InlineComments(assignmentStatement.GetTrailingTrivia())
             .AddRange(ifStatement.GetTrailingTrivia().Where(trivia =>
@@ -79,7 +81,8 @@ public sealed class UseNullCoalescingAssignmentCodeFixProvider : CodeFixProvider
                     SyntaxFactory.Token(SyntaxKind.QuestionQuestionEqualsToken),
                     assignment.Right))
             .WithLeadingTrivia(leadingTrivia)
-            .WithTrailingTrivia(trailingTrivia);
+            .WithTrailingTrivia(trailingTrivia)
+            .WithAdditionalAnnotations(Formatter.Annotation);
 
         return document.WithSyntaxRoot(root.ReplaceNode(ifStatement, replacement));
     }
@@ -90,7 +93,7 @@ public sealed class UseNullCoalescingAssignmentCodeFixProvider : CodeFixProvider
         {
             if (item.IsKind(SyntaxKind.SingleLineCommentTrivia) || item.IsKind(SyntaxKind.MultiLineCommentTrivia))
             {
-                result = result.Add(SyntaxFactory.ElasticMarker).Add(item).Add(SyntaxFactory.ElasticCarriageReturnLineFeed);
+                result = result.Add(SyntaxFactory.ElasticMarker).Add(item).Add(SyntaxFactory.ElasticLineFeed);
             }
         }
 

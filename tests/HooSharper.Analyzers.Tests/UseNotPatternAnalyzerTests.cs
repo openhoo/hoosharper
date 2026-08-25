@@ -132,6 +132,25 @@ public sealed class UseNotPatternAnalyzerTests
         var expected = VerifyCS.Diagnostic(UseNotPatternAnalyzer.DiagnosticId).WithLocation(0);
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
     }
+    [Fact]
+    public Task PreservesCommentBeforeClosingParenthesis()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(object value) => {|#0:!|}(value is string /* reason */);
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                bool Run(object value) => value is not string /* reason */;
+            }
+            """;
+
+        var expected = VerifyCS.Diagnostic(UseNotPatternAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
 
     [Fact]
     public Task DoesNotReportPatternWithDesignation()
