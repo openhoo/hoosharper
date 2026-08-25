@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.8 (2026-08-25)
+
+### Bug Fixes
+
+- **analyzers:** harden rules, fixes, and tests from full audit (b1bae29)
+- **build:** skip build-order target under no-build pack (db597bb)
+
 ## 0.3.7 (2026-08-10)
 
 ### Bug Fixes
