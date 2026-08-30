@@ -1,0 +1,19 @@
+branches:
+  - main
+packages:
+  - name: HooSharper.Analyzers
+    path: .
+    type: version-file
+    manifest: version
+    changelog: CHANGELOG.md
+    scopes:
+      - HooSharper.Analyzers
+      - hoosharper
+      - analyzers
+      - code-fixes
+      - release
+hooks:
+  afterVersion:
+    - bun run sync-readme-version
+github:
+  releases: true
