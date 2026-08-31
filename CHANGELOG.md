@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.10 (2026-08-31)
+
+### Bug Fixes
+
+- **package:** embed license in NuGet package (#6) (68d52bb)
+
 ## 0.3.9 (2026-08-31)
 
 ### Bug Fixes
