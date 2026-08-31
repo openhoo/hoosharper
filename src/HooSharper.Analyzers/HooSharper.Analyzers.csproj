@@ -37,6 +37,7 @@
     <None Include="$(OutputPath)$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
     <None Include="..\HooSharper.CodeFixes\bin\$(Configuration)\netstandard2.0\HooSharper.CodeFixes.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
     <None Include="..\..\README.md" Pack="true" PackagePath="\" Link="README.md" />
+    <None Include="..\..\LICENSE" Pack="true" PackagePath="\" Link="LICENSE" />
     <None Include="../../docs/assets/hoosharper-logo.png" Pack="true" PackagePath="" />
   </ItemGroup>
 
