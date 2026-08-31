@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.9 (2026-08-31)
+
+### Bug Fixes
+
+- align Hoostack policy and release supply chain (#3) (1b896a9)
+- **release:** honor protected main branch (dd0c7f6)
+
+### Other Changes
+
+- standardize Hoostack dogfood (#2) (29857f1)
+
 ## 0.3.8 (2026-08-25)
 
 ### Bug Fixes
