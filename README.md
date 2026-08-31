@@ -543,8 +543,14 @@ CI follows the shared OpenHoo release model:
 3. The analyzer test project and its dependencies are restored and built with the SDK policy in `global.json`, its tests run with a line-coverage gate, and the analyzer package is packed.
 4. A successful non-release push to `main` triggers `.github/workflows/release.yml`.
 5. Hooversion calculates the next semantic version, updates `version` and `CHANGELOG.md`, creates a `chore(release):` commit and `v<version>` tag, pushes both, and creates the GitHub Release.
-6. The tagged source is rebuilt and published to GitHub Packages.
-7. After that succeeds, the release workflow automatically dispatches the trusted-publishing job in `.github/workflows/ci.yml` for the same tag and publishes the package to nuget.org.
+6. The tagged source is rebuilt, published to GitHub Packages, and attached to
+   the GitHub Release with an SPDX SBOM, checksums, Sigstore bundles, and GitHub
+   artifact attestations.
+7. After that succeeds, the release workflow automatically dispatches the
+   trusted-publishing job in `.github/workflows/ci.yml` for the same tag. That
+   job downloads the already signed GitHub Release package, verifies its
+   checksum, then publishes that exact artifact to nuget.org without rebuilding
+   it.
 
 Version changes are derived from Conventional Commits:
 
@@ -569,13 +575,15 @@ To preview a release without creating commits, tags, releases, or packages, run 
 
 ```bash
 git clone https://github.com/openhoo/hooversion.git /tmp/hooversion
-git -C /tmp/hooversion checkout 799ecf4a9c29e8ce4d5ad7055a6030adf665cf82
-(cd /tmp/hooversion && bun install --frozen-lockfile)
-bun /tmp/hooversion/src/cli.ts plan
-bun /tmp/hooversion/src/cli.ts release --dry-run
+git -C /tmp/hooversion checkout 528576f6fbc6136ec5f76ac53bf81d3e04aca4b3
+(cd /tmp/hooversion && go build -o /tmp/hooversion-bin ./cmd/hooversion)
+/tmp/hooversion-bin plan
+/tmp/hooversion-bin release --dry-run
 ```
 
-The Hooversion action and installation source are pinned to the audited `v0.2.0` commit. Update that SHA deliberately in both workflows when upgrading Hooversion.
+The Hooversion action and installation source are pinned to the audited
+`v1.0.6` commit. Update its immutable SHA and matching version input
+deliberately in both workflows when upgrading Hooversion.
 
 ## Contributing a rule
 
@@ -591,4 +599,4 @@ New fixers should preserve trivia, request Roslyn formatting only for changed no
 
 ## License
 
-HooSharper is licensed under the [MIT License](LICENSE).
+HooSharper is licensed under the [Apache License 2.0](LICENSE).
