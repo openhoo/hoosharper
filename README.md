@@ -575,14 +575,14 @@ To preview a release without creating commits, tags, releases, or packages, run 
 
 ```bash
 git clone https://github.com/openhoo/hooversion.git /tmp/hooversion
-git -C /tmp/hooversion checkout d536bb45b5c2dbf9a17c866c0fe48f54216a1673
+git -C /tmp/hooversion checkout f2186561c587b58c5ea08c74c15800cdd39eab42
 (cd /tmp/hooversion && go build -o /tmp/hooversion-bin ./cmd/hooversion)
 /tmp/hooversion-bin plan
 /tmp/hooversion-bin release --dry-run
 ```
 
 The Hooversion action and installation source are pinned to the audited
-`v1.0.7` commit. Update its immutable SHA and matching version input
+`v1.1.0` commit. Update its immutable SHA and matching version input
 deliberately in both workflows when upgrading Hooversion.
 
 ## Contributing a rule
