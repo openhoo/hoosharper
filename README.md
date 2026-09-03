@@ -477,7 +477,7 @@ The custom test verifier is in `tests/HooSharper.Analyzers.Tests/AnalyzerVerifie
 
 The BenchmarkDotNet project measures real Roslyn analyzer and code-fix execution. It creates deterministic compilations with 100 or 1,000 candidate groups and records both execution time and managed allocations.
 
-Code-fix application benchmarks create a fresh Roslyn workspace, diagnostic, and action for every measured invocation. Their result therefore includes fixture analysis and action registration as well as action computation and application; registration-only benchmarks isolate `RegisterCodeFixesAsync`.
+Benchmark methods report distinct timing scopes. `Registration` measures only `RegisterCodeFixesAsync` against a prepared fixture; `ComputeOperations` measures only code-action operation computation, with fixture creation, analysis, registration, and application outside the measured method; `ApplyOperations` measures only application, with fixture creation, analysis, registration, and operation computation outside the measured method. `DiscoverRegisterApply` measures the end-to-end fixture discovery, registration, operation computation, and application path. `DocumentFixAll` measures Fix All operation computation and application after fixture discovery, analysis, registration, and Fix All action creation in iteration setup. Registration-only timing therefore does not include analyzer discovery or fixture construction.
 
 List the available benchmarks:
 
@@ -575,14 +575,14 @@ To preview a release without creating commits, tags, releases, or packages, run 
 
 ```bash
 git clone https://github.com/openhoo/hooversion.git /tmp/hooversion
-git -C /tmp/hooversion checkout f2186561c587b58c5ea08c74c15800cdd39eab42
+git -C /tmp/hooversion checkout ac503b23b9b36ebbf39ee6103713c81f1f18b64d
 (cd /tmp/hooversion && go build -o /tmp/hooversion-bin ./cmd/hooversion)
 /tmp/hooversion-bin plan
 /tmp/hooversion-bin release --dry-run
 ```
 
 The Hooversion action and installation source are pinned to the audited
-`v1.1.0` commit. Update its immutable SHA and matching version input
+`v1.1.1` commit. Update its immutable SHA and matching version input
 deliberately in both workflows when upgrading Hooversion.
 
 ## Contributing a rule
