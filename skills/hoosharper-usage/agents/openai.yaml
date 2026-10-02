@@ -1,0 +1,4 @@
+interface:
+  display_name: "HooSharper User Guide"
+  short_description: "Configure and use HooSharper C# diagnostics"
+  default_prompt: "Use $hoosharper-usage to set up and verify this workflow in my project."

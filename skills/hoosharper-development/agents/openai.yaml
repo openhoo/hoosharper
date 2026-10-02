@@ -1,0 +1,4 @@
+interface:
+  display_name: "HooSharper Development"
+  short_description: "Develop and verify HooSharper source changes"
+  default_prompt: "Use $hoosharper-development to implement and verify this change in the source repository."

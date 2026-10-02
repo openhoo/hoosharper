@@ -9,6 +9,30 @@ HooSharper is an open-source collection of Roslyn analyzers and code fixes for o
 
 The package currently ships 20 rules covering guard clauses, compact conditionals, redundant control flow, type patterns, boolean expressions, collection lookups, null handling, argument validation, using declarations, string presence tests, and fluent-chain formatting.
 
+## Agent skills
+
+Two installable skills serve different tasks:
+
+- [`hoosharper-usage`](skills/hoosharper-usage/SKILL.md) helps agents install and configure analyzers in your C# project.
+- [`hoosharper-development`](skills/hoosharper-development/SKILL.md) helps agents
+  change and verify hoosharper itself. Repository agents find it through
+  `AGENTS.md` and `.agents/skills`.
+
+Install the user skill from your consuming project's directory:
+
+```bash
+npx skills add openhoo/hoosharper --skill hoosharper-usage
+```
+
+For contributor work, select `--skill hoosharper-development`. Add `--global`
+for use across projects; otherwise installation is project-scoped. The installer
+lets you select your supported coding agent. Skills supply instructions and
+bundled references; install the product separately using the guidance below.
+
+For unpublished changes, pass the local checkout path instead of
+`openhoo/hoosharper`, for example
+`npx skills add ./hoosharper --skill hoosharper-usage` from its parent directory.
+
 ## Requirements
 
 - A C# project using an SDK-style project file
