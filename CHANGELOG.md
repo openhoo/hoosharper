@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.11 (2026-10-07)
+
+### Bug Fixes
+
+- **hoosharper:** harden rewrite safety and compiler compatibility (#15) (bfe470e)
+
+### Other Changes
+
+- **ci:** update Hoostack tool pins (#9) (e4773da)
+- **ci:** adopt HooNeedsUpdates v0.3.0 (b346a95)
+- **performance:** clarify benchmark timing scopes (3691d8a)
+- **ci:** adopt Hoonarqube v0.3.1 (c073062)
+- **hoosharper:** add contributor and user agent skills (#14) (df9fb27)
+
 ## 0.3.10 (2026-08-31)
 
 ### Bug Fixes
