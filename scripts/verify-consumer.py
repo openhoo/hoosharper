@@ -23,10 +23,14 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory(prefix="hoosharper-consumer-") as directory:
         root = Path(directory)
-        sdk_version = args.sdk_version or json.loads(
+        sdk_policy = json.loads(
             (Path(__file__).resolve().parents[1] / "global.json").read_text()
-        )["sdk"]["version"]
-        (root / "global.json").write_text(json.dumps({"sdk": {"version": sdk_version, "rollForward": "disable"}}))
+        )["sdk"]
+        if args.sdk_version:
+            sdk_policy = {"version": args.sdk_version, "rollForward": "disable"}
+        # setup-dotnet respects the repository's latestPatch policy and may
+        # install a later patch than its requested minimum version.
+        (root / "global.json").write_text(json.dumps({"sdk": sdk_policy}))
         # Isolate the package cache so an older published package with the same
         # version cannot hide a regression in the locally packed assemblies.
         (root / "Consumer.csproj").write_text(
