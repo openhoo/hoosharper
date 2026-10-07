@@ -17,7 +17,7 @@ namespace HooSharper.CodeFixes;
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(OmitBracesForSingleLineIfCodeFixProvider)), Shared]
 public sealed class OmitBracesForSingleLineIfCodeFixProvider : CodeFixProvider
 {
-    public override ImmutableArray<string> FixableDiagnosticIds => [OmitBracesForSingleLineIfAnalyzer.DiagnosticId];
+    public override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(OmitBracesForSingleLineIfAnalyzer.DiagnosticId);
 
     public override FixAllProvider GetFixAllProvider() => WellKnownFixAllProviders.BatchFixer;
 
@@ -48,6 +48,7 @@ public sealed class OmitBracesForSingleLineIfCodeFixProvider : CodeFixProvider
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
         if (root is null || block.Statements.Count != 1 ||
+            block.FirstAncestorOrSelf<IfStatementSyntax>()?.ContainsDiagnostics == true ||
             HasDirective(block) ||
             block.Statements[0] is LabeledStatementSyntax ||
             block.Parent is IfStatementSyntax { Statement: var thenStatement, Else: not null } &&
@@ -123,6 +124,15 @@ public sealed class OmitBracesForSingleLineIfCodeFixProvider : CodeFixProvider
         if (containingStatement?.Parent is not BlockSyntax parentBlock)
         {
             return true;
+        }
+
+        foreach (var token in containingStatement.DescendantTokens())
+        {
+            if (!block.FullSpan.Contains(token.Span) && token.IsKind(SyntaxKind.IdentifierToken) &&
+                introducedNames.Contains(token.ValueText))
+            {
+                return true;
+            }
         }
 
         var statementIndex = parentBlock.Statements.IndexOf(containingStatement);

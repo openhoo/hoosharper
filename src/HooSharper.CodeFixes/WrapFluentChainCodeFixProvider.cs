@@ -16,7 +16,7 @@ namespace HooSharper.CodeFixes;
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(WrapFluentChainCodeFixProvider)), Shared]
 public sealed class WrapFluentChainCodeFixProvider : CodeFixProvider
 {
-    public override ImmutableArray<string> FixableDiagnosticIds => [WrapFluentChainAnalyzer.DiagnosticId];
+    public override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(WrapFluentChainAnalyzer.DiagnosticId);
 
     public override FixAllProvider GetFixAllProvider() => WellKnownFixAllProviders.BatchFixer;
 

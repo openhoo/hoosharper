@@ -22,7 +22,7 @@ public sealed class RemoveRedundantNullConditionalGuardAnalyzer : DiagnosticAnal
         isEnabledByDefault: true,
         description: "Remove a null guard around a single null-conditional expression statement for the same stable receiver.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {

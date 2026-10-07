@@ -22,7 +22,7 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "Replace a conditional null check and immediate member access with null-conditional access.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {
@@ -32,15 +32,17 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
         {
             var expressionType = compilationContext.Compilation.GetTypeByMetadataName(
                 "System.Linq.Expressions.Expression`1");
+            var queryableType = compilationContext.Compilation.GetTypeByMetadataName("System.Linq.IQueryable");
             compilationContext.RegisterSyntaxNodeAction(
-                nodeContext => AnalyzeConditionalExpression(nodeContext, expressionType),
+                nodeContext => AnalyzeConditionalExpression(nodeContext, expressionType, queryableType),
                 SyntaxKind.ConditionalExpression);
         });
     }
 
     private static void AnalyzeConditionalExpression(
         SyntaxNodeAnalysisContext context,
-        INamedTypeSymbol? expressionType)
+        INamedTypeSymbol? expressionType,
+        INamedTypeSymbol? queryableType)
     {
         var conditional = (ConditionalExpressionSyntax)context.Node;
         if (context.Node.SyntaxTree.Options is not CSharpParseOptions parseOptions ||
@@ -48,7 +50,7 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
              parseOptions.LanguageVersion < LanguageVersion.CSharp6) ||
             !HasCandidateShape(conditional) ||
             HasDirective(conditional) ||
-            IsWithinExpressionTree(conditional, context.SemanticModel, expressionType, context.CancellationToken) ||
+            IsWithinExpressionTree(conditional, context.SemanticModel, expressionType, queryableType, context.CancellationToken) ||
             !TryGetCandidate(conditional, context.SemanticModel, context.CancellationToken,
                 out var receiver, out var access))
         {
@@ -327,18 +329,25 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
         SyntaxNode node,
         SemanticModel semanticModel,
         INamedTypeSymbol? expressionType,
+        INamedTypeSymbol? queryableType,
         System.Threading.CancellationToken cancellationToken)
     {
-        if (expressionType is null)
-        {
-            return false;
-        }
         for (var ancestor = node.Parent; ancestor is not null; ancestor = ancestor.Parent)
         {
-            if (ancestor is AnonymousFunctionExpressionSyntax anonymousFunction &&
+            if (expressionType is not null &&
+                ancestor is AnonymousFunctionExpressionSyntax anonymousFunction &&
                 semanticModel.GetTypeInfo(anonymousFunction, cancellationToken).ConvertedType is
                     INamedTypeSymbol convertedType &&
                 SymbolEqualityComparer.Default.Equals(convertedType.OriginalDefinition, expressionType))
+            {
+                return true;
+            }
+
+            if (queryableType is not null && ancestor is QueryExpressionSyntax query &&
+                semanticModel.GetTypeInfo(query, cancellationToken).Type is INamedTypeSymbol queryType &&
+                (SymbolEqualityComparer.Default.Equals(queryType.OriginalDefinition, queryableType) ||
+                 queryType.AllInterfaces.Any(type => SymbolEqualityComparer.Default.Equals(
+                     type.OriginalDefinition, queryableType))))
             {
                 return true;
             }

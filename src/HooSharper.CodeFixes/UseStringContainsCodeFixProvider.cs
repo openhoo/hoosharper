@@ -15,7 +15,7 @@ namespace HooSharper.CodeFixes;
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(UseStringContainsCodeFixProvider)), Shared]
 public sealed class UseStringContainsCodeFixProvider : CodeFixProvider
 {
-    public override ImmutableArray<string> FixableDiagnosticIds => [UseStringContainsAnalyzer.DiagnosticId];
+    public override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(UseStringContainsAnalyzer.DiagnosticId);
 
     public override FixAllProvider GetFixAllProvider() => WellKnownFixAllProviders.BatchFixer;
 
@@ -62,14 +62,42 @@ public sealed class UseStringContainsCodeFixProvider : CodeFixProvider
             replacement = SyntaxFactory.PrefixUnaryExpression(SyntaxKind.LogicalNotExpression, replacement);
         }
 
-        var interstitialTrivia = SyntaxFactory.TriviaList(comparison.DescendantTrivia()
-            .Where(trivia =>
-                !invocation.Span.Contains(trivia.Span) &&
-                !trivia.IsKind(SyntaxKind.WhitespaceTrivia) &&
-                !trivia.IsKind(SyntaxKind.EndOfLineTrivia)));
+        var removedTrivia = comparison.DescendantTrivia()
+            .Where(trivia => comparison.Span.Contains(trivia.Span) &&
+                             !invocation.Span.Contains(trivia.Span)).ToArray();
+        var hasLineComment = removedTrivia.Any(trivia => trivia.IsKind(SyntaxKind.SingleLineCommentTrivia));
+        var interstitialTrivia = SyntaxFactory.TriviaList();
+        for (var index = 0; index < removedTrivia.Length; index++)
+        {
+            var trivia = removedTrivia[index];
+            if (trivia.IsKind(SyntaxKind.WhitespaceTrivia))
+            {
+                // Preserve comment separation and continuation indentation,
+                // while dropping spaces belonging to the removed comparison.
+                if (hasLineComment &&
+                    (index > 0 && removedTrivia[index - 1].IsKind(SyntaxKind.EndOfLineTrivia) ||
+                     index + 1 < removedTrivia.Length && removedTrivia[index + 1].IsKind(SyntaxKind.SingleLineCommentTrivia)))
+                {
+                    interstitialTrivia = interstitialTrivia.Add(trivia);
+                }
+            }
+            else if (!trivia.IsKind(SyntaxKind.EndOfLineTrivia) || hasLineComment)
+            {
+                interstitialTrivia = interstitialTrivia.Add(trivia);
+            }
+        }
+
+        var trailingTrivia = comparison.GetTrailingTrivia();
+        if (hasLineComment && interstitialTrivia.Count > 0 &&
+            interstitialTrivia[interstitialTrivia.Count - 1].IsKind(SyntaxKind.WhitespaceTrivia))
+        {
+            trailingTrivia = SyntaxFactory.TriviaList(trailingTrivia
+                .SkipWhile(trivia => trivia.IsKind(SyntaxKind.WhitespaceTrivia)));
+        }
+
         replacement = replacement
             .WithLeadingTrivia(comparison.GetLeadingTrivia())
-            .WithTrailingTrivia(interstitialTrivia.AddRange(comparison.GetTrailingTrivia()));
+            .WithTrailingTrivia(interstitialTrivia.AddRange(trailingTrivia));
 
         return document.WithSyntaxRoot(root.ReplaceNode(comparison, replacement));
     }

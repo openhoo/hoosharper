@@ -863,4 +863,28 @@ public sealed class PreferLoopContinueAnalyzerTests
 
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
+
+    [Fact]
+    public Task DoesNotHoistDeclarationsOverExistingMemberUses()
+    {
+        const string source = """
+            class Example
+            {
+                bool ready = true;
+                void Run()
+                {
+                    while (true)
+                    {
+                        if (ready)
+                        {
+                            bool ready = false;
+                            System.Console.WriteLine(ready);
+                        }
+                    }
+                }
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
 }

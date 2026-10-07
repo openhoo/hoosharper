@@ -956,4 +956,84 @@ public sealed class MergeNestedIfAnalyzerTests
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
     }
 
+
+    [Fact]
+    public Task DoesNotHoistDeclarationsOverExistingMemberUses()
+    {
+        const string source = """
+            class Example
+            {
+                int value = 1;
+                void Run(bool ready, object candidate)
+                {
+                    System.Console.WriteLine(value);
+                    if (ready)
+                    {
+                        if (candidate is int value)
+                            System.Console.WriteLine(value);
+                    }
+                }
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+
+    [Fact]
+    public Task PreservesDeepConditionCommentExactlyOnce()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool first, bool second, bool third)
+                {
+                    {|#0:if|} (first)
+                    {
+                        if (second)
+                        {
+                            if (third /* audit */ && first)
+                                System.Console.WriteLine();
+                        }
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool first, bool second, bool third)
+                {
+                    if (first && second && (third /* audit */ && first))
+                        System.Console.WriteLine();
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(MergeNestedIfAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+
+    [Fact]
+    public Task DoesNotMergeDesignationOverIntermediateConditionMemberReference()
+    {
+        const string source = """
+            class Example
+            {
+                int value = 42;
+                void Run(bool ready, object candidate)
+                {
+                    if (ready)
+                    {
+                        if (value > 0)
+                        {
+                            if (candidate is int value)
+                                System.Console.WriteLine(value);
+                        }
+                    }
+                }
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
 }

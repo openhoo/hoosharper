@@ -1347,4 +1347,148 @@ public sealed class UseTryGetValueAnalyzerTests
         var expected = VerifyCS.Diagnostic(UseTryGetValueAnalyzer.DiagnosticId).WithLocation(0);
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
     }
+    [Theory]
+    [InlineData("var ignored = Trigger;")]
+    [InlineData("Trigger = 1;")]
+    [InlineData("var ignored = operand + operand;")]
+    [InlineData("int ignored = operand;")]
+    [InlineData("var ignored = $\"{operand}\";")]
+    [InlineData("dynamic dynamicOperand = operand; var ignored = dynamicOperand + dynamicOperand;")]
+    [InlineData("dynamic dynamicOperand = operand; int ignored = dynamicOperand;")]
+    public Task IgnoresImplicitCallbacksBetweenLookups(string callback)
+    {
+        var source = $$"""
+            using System.Collections.Generic;
+
+            class Example
+            {
+                private readonly Dictionary<string, int> values = new();
+                private const string Key = "key";
+                private readonly Operand operand = new();
+                private int Trigger
+                {
+                    get { values.Clear(); return 0; }
+                    set { values.Clear(); }
+                }
+
+                private sealed class Operand
+                {
+                    public static Operand operator +(Operand left, Operand right) => left;
+                    public static implicit operator int(Operand value) => 0;
+                    public override string ToString() => "side effect possible";
+                }
+
+                int Run()
+                {
+                    if (values.ContainsKey(Key))
+                    {
+                        {{callback}}
+                        return values[Key];
+                    }
+
+                    return 0;
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task IgnoresIteratorSuspensionBetweenLookups()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            class Example
+            {
+                private readonly Dictionary<string, int> values = new();
+                IEnumerable<int> Run()
+                {
+                    if (values.ContainsKey("key"))
+                    {
+                        yield return 1;
+                        yield return values["key"];
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Theory]
+    [InlineData("{ using var lease = resource; }")]
+    [InlineData("var (first, second) = resource;")]
+    [InlineData("var matched = resource is (0, 0);")]
+    public Task IgnoresImplicitDisposalAndDeconstruction(string callback)
+    {
+        var source = $$"""
+            using System;
+            using System.Collections.Generic;
+            class Example
+            {
+                private readonly Dictionary<string, int> values = new();
+                private readonly Resource resource = new();
+                private sealed class Resource : IDisposable
+                {
+                    public void Dispose() { }
+                    public void Deconstruct(out int first, out int second) { first = second = 0; }
+                }
+
+                int Run()
+                {
+                    if (values.ContainsKey("key"))
+                    {
+                        {{callback}}
+                        return values["key"];
+                    }
+
+                    return 0;
+                }
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task PreservesDeferredLocalFunctionWithImplicitCallback()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            class Example
+            {
+                private readonly Dictionary<string, int> values = new();
+                private int Trigger { get { values.Clear(); return 0; } }
+                int Run()
+                {
+                    if (values.{|#0:ContainsKey|}("key"))
+                    {
+                        int Later() => Trigger;
+                        return values["key"];
+                    }
+                    return 0;
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+            class Example
+            {
+                private readonly Dictionary<string, int> values = new();
+                private int Trigger { get { values.Clear(); return 0; } }
+                int Run()
+                {
+                    if (values.TryGetValue("key", out var value))
+                    {
+                        int Later() => Trigger;
+                        return value;
+                    }
+                    return 0;
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(UseTryGetValueAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
 }

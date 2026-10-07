@@ -17,7 +17,7 @@ namespace HooSharper.CodeFixes;
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(PreferLoopContinueCodeFixProvider)), Shared]
 public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
 {
-    public override ImmutableArray<string> FixableDiagnosticIds => [PreferLoopContinueAnalyzer.DiagnosticId];
+    public override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(PreferLoopContinueAnalyzer.DiagnosticId);
 
     public override FixAllProvider GetFixAllProvider() => WellKnownFixAllProviders.BatchFixer;
 
@@ -101,6 +101,14 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
         if (introducedNames.Count == 0 && introducedLabels.Count == 0)
         {
             return false;
+        }
+
+        foreach (var token in ifStatement.Condition.DescendantTokens())
+        {
+            if (token.IsKind(SyntaxKind.IdentifierToken) && introducedNames.Contains(token.ValueText))
+            {
+                return true;
+            }
         }
 
         var ifIndex = parentBlock.Statements.IndexOf(ifStatement);

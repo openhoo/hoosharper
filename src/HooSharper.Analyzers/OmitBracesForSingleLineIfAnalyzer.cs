@@ -22,7 +22,7 @@ public sealed class OmitBracesForSingleLineIfAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "Single-statement if branches do not need braces.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {
@@ -34,6 +34,11 @@ public sealed class OmitBracesForSingleLineIfAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
+        if (ifStatement.ContainsDiagnostics)
+        {
+            return;
+        }
+
         ReportIfSafe(context, ifStatement.Statement, ifStatement.Else is not null);
 
         if (ifStatement.Else is { Statement: not IfStatementSyntax } elseClause)
@@ -44,7 +49,8 @@ public sealed class OmitBracesForSingleLineIfAnalyzer : DiagnosticAnalyzer
 
     private static void ReportIfSafe(SyntaxNodeAnalysisContext context, StatementSyntax statement, bool hasFollowingElse)
     {
-        if (statement is not BlockSyntax { Statements.Count: 1 } block)
+        if (statement.ContainsDiagnostics ||
+            statement is not BlockSyntax { Statements.Count: 1 } block)
         {
             return;
         }
@@ -111,6 +117,15 @@ public sealed class OmitBracesForSingleLineIfAnalyzer : DiagnosticAnalyzer
         if (containingStatement?.Parent is not BlockSyntax parentBlock)
         {
             return true;
+        }
+
+        foreach (var token in containingStatement.DescendantTokens())
+        {
+            if (!block.FullSpan.Contains(token.Span) && token.IsKind(SyntaxKind.IdentifierToken) &&
+                introducedNames.Contains(token.ValueText))
+            {
+                return true;
+            }
         }
 
         var statementIndex = parentBlock.Statements.IndexOf(containingStatement);

@@ -241,4 +241,36 @@ public sealed class UseStringContainsAnalyzerTests
         };
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
     }
+    [Fact]
+    public Task PreservesLineCommentNewlinesAndBoundaryCommentsDuringFixAll()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(string value) =>
+                    /* before */ value.{|#0:IndexOf|}('x') // first search
+                        >= 0 &&
+                    value.{|#1:IndexOf|}('y') // second search
+                        == -1 /* after */;
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                bool Run(string value) =>
+                    /* before */ value.Contains('x') // first search
+                        &&
+                    !value.Contains('y') // second search
+                        /* after */;
+            }
+            """;
+
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(UseStringContainsAnalyzer.DiagnosticId).WithLocation(0),
+            VerifyCS.Diagnostic(UseStringContainsAnalyzer.DiagnosticId).WithLocation(1),
+        };
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
 }

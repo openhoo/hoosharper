@@ -11,6 +11,8 @@ Use the .NET SDK from `global.json` and the Bun version pinned by workflows.
 dotnet restore HooSharper.slnx
 dotnet build HooSharper.slnx -c Release --no-restore
 dotnet test HooSharper.slnx -c Release --no-build
+dotnet run --project benchmarks/HooSharper.Performance/HooSharper.Performance.csproj \
+  -c Release --no-build -- --validate-fixtures
 bun install --frozen-lockfile
 bun run check-readme-version
 ```

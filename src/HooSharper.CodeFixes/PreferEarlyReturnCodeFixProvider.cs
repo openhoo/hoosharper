@@ -18,7 +18,7 @@ namespace HooSharper.CodeFixes;
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(PreferEarlyReturnCodeFixProvider)), Shared]
 public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
 {
-    public override ImmutableArray<string> FixableDiagnosticIds => [PreferEarlyReturnAnalyzer.DiagnosticId];
+    public override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(PreferEarlyReturnAnalyzer.DiagnosticId);
 
     public override FixAllProvider GetFixAllProvider() => WellKnownFixAllProviders.BatchFixer;
 
@@ -66,7 +66,9 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
         var guard = SyntaxFactory.IfStatement(
                 negatedCondition,
                 SyntaxFactory.ReturnStatement())
-            .WithLeadingTrivia(ifStatement.GetLeadingTrivia());
+            .WithIfKeyword(ifStatement.IfKeyword)
+            .WithOpenParenToken(ifStatement.OpenParenToken)
+            .WithCloseParenToken(ifStatement.CloseParenToken);
 
         var movedStatements = body.Statements.ToList();
         PreserveSignificantTrivia(body, ifStatement, movedStatements);
@@ -123,11 +125,25 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
             return false;
         }
 
+        if (ifStatement.Condition.DescendantTokens().Any(token =>
+            token.IsKind(SyntaxKind.IdentifierToken) && movedNames.Contains(token.ValueText)))
+        {
+            return true;
+        }
+
         foreach (var statement in parentBlock.Statements)
         {
             if (statement == ifStatement)
             {
                 continue;
+            }
+
+            // Deferred bodies still bind names in their enclosing declaration scope.
+            if (statement.DescendantNodesAndSelf().Any(node =>
+                node is IdentifierNameSyntax identifier && movedNames.Contains(identifier.Identifier.ValueText) ||
+                node is GenericNameSyntax generic && movedNames.Contains(generic.Identifier.ValueText)))
+            {
+                return true;
             }
 
             foreach (var node in statement.DescendantNodesAndSelf(ShouldDescendInto))
@@ -142,7 +158,9 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
                     _ => null,
                 };
 
-                if (name is not null && movedNames.Contains(name))
+                if (node is IdentifierNameSyntax identifier && movedNames.Contains(identifier.Identifier.ValueText) ||
+                    node is GenericNameSyntax generic && movedNames.Contains(generic.Identifier.ValueText) ||
+                    name is not null && movedNames.Contains(name))
                 {
                     return true;
                 }

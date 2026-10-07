@@ -28,7 +28,7 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "Long single-line fluent chains are easier to read when every continuation starts on its own line.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {
@@ -41,7 +41,7 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
     {
         var memberAccess = (MemberAccessExpressionSyntax)context.Node;
         var chain = GetOutermostChain(memberAccess);
-        if (GetLastMemberAccess(chain) != memberAccess ||
+        if (chain.ContainsDiagnostics || GetLastMemberAccess(chain) != memberAccess ||
             !HasStatementOrArrowAncestor(chain, out var isInInterpolation) ||
             HasDirective(chain) ||
             HasBoundaryOnLeftSpine(chain) ||

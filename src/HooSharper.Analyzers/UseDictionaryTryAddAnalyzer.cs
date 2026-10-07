@@ -22,7 +22,7 @@ public sealed class UseDictionaryTryAddAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "Dictionary.TryAdd performs the existence check and insertion in one operation.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {

@@ -23,7 +23,7 @@ public sealed class PreferEarlyReturnAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "Prefer a guard clause when an if statement wraps the remaining statements of a void method.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {
@@ -35,7 +35,8 @@ public sealed class PreferEarlyReturnAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
-        if (ifStatement.Else is not null ||
+        if (ifStatement.ContainsDiagnostics ||
+            ifStatement.Else is not null ||
             ifStatement.Statement is not BlockSyntax block ||
             block.Statements.Count == 0 ||
             ifStatement.ContainsDirectives)
@@ -104,11 +105,25 @@ public sealed class PreferEarlyReturnAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
+        if (ifStatement.Condition.DescendantTokens().Any(token =>
+            token.IsKind(SyntaxKind.IdentifierToken) && movedNames.Contains(token.ValueText)))
+        {
+            return true;
+        }
+
         foreach (var statement in parentBlock.Statements)
         {
             if (statement == ifStatement)
             {
                 continue;
+            }
+
+            // Deferred bodies still bind names in their enclosing declaration scope.
+            if (statement.DescendantNodesAndSelf().Any(node =>
+                node is IdentifierNameSyntax identifier && movedNames.Contains(identifier.Identifier.ValueText) ||
+                node is GenericNameSyntax generic && movedNames.Contains(generic.Identifier.ValueText)))
+            {
+                return true;
             }
 
             foreach (var node in statement.DescendantNodesAndSelf(ShouldDescendInto))
@@ -123,7 +138,9 @@ public sealed class PreferEarlyReturnAnalyzer : DiagnosticAnalyzer
                     _ => null,
                 };
 
-                if (name is not null && movedNames.Contains(name))
+                if (node is IdentifierNameSyntax identifier && movedNames.Contains(identifier.Identifier.ValueText) ||
+                    node is GenericNameSyntax generic && movedNames.Contains(generic.Identifier.ValueText) ||
+                    name is not null && movedNames.Contains(name))
                 {
                     return true;
                 }

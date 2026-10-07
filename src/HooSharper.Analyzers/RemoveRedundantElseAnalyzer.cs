@@ -21,7 +21,7 @@ public sealed class RemoveRedundantElseAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "Remove an else branch when the preceding if branch definitely terminates control flow.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {
@@ -34,7 +34,7 @@ public sealed class RemoveRedundantElseAnalyzer : DiagnosticAnalyzer
     {
         var ifStatement = (IfStatementSyntax)context.Node;
         var elseClause = ifStatement.Else;
-        if (elseClause is null || elseClause.Statement is IfStatementSyntax || ifStatement.Parent is ElseClauseSyntax ||
+        if (ifStatement.ContainsDiagnostics || elseClause is null || elseClause.Statement is IfStatementSyntax || ifStatement.Parent is ElseClauseSyntax ||
             HasDirective(elseClause) ||
             !DefinitelyTerminates(ifStatement.Statement, context.SemanticModel))
         {

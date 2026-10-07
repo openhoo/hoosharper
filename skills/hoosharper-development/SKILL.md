@@ -7,7 +7,8 @@ description: Develop and verify HooSharper Roslyn analyzers and code fixes, incl
 
 Run commands at the source root. Read `CONTRIBUTING.md`; SDK and tool versions
 come from `global.json`, `package.json`, and CI. The analyzer targets
-`netstandard2.0`; the development SDK is .NET 10.0.109 with latest-patch rollforward.
+`netstandard2.0` with Roslyn 4.8 dependencies; tests/benchmarks may use newer
+Roslyn packages without raising the shipped host requirement. The development SDK is .NET 10.0.109 with latest-patch rollforward.
 
 ## Find the implementation
 
@@ -32,6 +33,8 @@ outside release work.
 dotnet restore HooSharper.slnx
 dotnet build HooSharper.slnx -c Release --no-restore
 dotnet test HooSharper.slnx -c Release --no-build
+dotnet run --project benchmarks/HooSharper.Performance/HooSharper.Performance.csproj \
+  -c Release --no-build -- --validate-fixtures
 bun install --frozen-lockfile
 bun run check-readme-version
 ```
@@ -60,6 +63,8 @@ use its coverage command when adding analyzer/fixer paths.
 ```bash
 dotnet pack src/HooSharper.Analyzers/HooSharper.Analyzers.csproj \
   -c Release --no-build -o artifacts
+python3 scripts/verify-package.py artifacts/HooSharper.Analyzers.*.nupkg
+python3 scripts/verify-consumer.py artifacts/HooSharper.Analyzers.*.nupkg
 ```
 
 Build both projects before packing with `--no-build`. Inspect the `.nupkg` for

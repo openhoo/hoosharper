@@ -582,4 +582,25 @@ public sealed class OmitBracesForSingleLineIfAnalyzerTests
 
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
+
+    [Fact]
+    public Task KeepsBracesWhenOutVariableWouldShadowTheIfCondition()
+    {
+        const string source = """
+            class Example
+            {
+                int value = 1;
+                void Run()
+                {
+                    if (value > 0)
+                    {
+                        Assign(out int value);
+                    }
+                }
+                void Assign(out int result) => result = 2;
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
 }

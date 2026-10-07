@@ -18,7 +18,7 @@ namespace HooSharper.CodeFixes;
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(SimplifyBooleanReturnCodeFixProvider)), Shared]
 public sealed class SimplifyBooleanReturnCodeFixProvider : CodeFixProvider
 {
-    public override ImmutableArray<string> FixableDiagnosticIds => [SimplifyBooleanReturnAnalyzer.DiagnosticId];
+    public override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(SimplifyBooleanReturnAnalyzer.DiagnosticId);
 
     public override FixAllProvider GetFixAllProvider() => WellKnownFixAllProviders.BatchFixer;
 
@@ -87,6 +87,7 @@ public sealed class SimplifyBooleanReturnCodeFixProvider : CodeFixProvider
     {
         var trivia = new List<SyntaxTrivia>();
         AddSignificantTrivia(trivia, ifStatement.DescendantTrivia().Where(item =>
+            ifStatement.Span.Contains(item.Span) &&
             !ifStatement.Condition.Span.Contains(item.Span)));
         AddSignificantTrivia(trivia, nextReturn.DescendantTrivia());
         return SyntaxFactory.TriviaList(WithLineBreaks(trivia));
@@ -142,6 +143,14 @@ public sealed class SimplifyBooleanReturnCodeFixProvider : CodeFixProvider
 
     private static ExpressionSyntax Negate(ExpressionSyntax expression)
     {
+        if (expression.DescendantTrivia().Any(item =>
+            !item.IsKind(SyntaxKind.WhitespaceTrivia) && !item.IsKind(SyntaxKind.EndOfLineTrivia)))
+        {
+            return SyntaxFactory.PrefixUnaryExpression(
+                SyntaxKind.LogicalNotExpression,
+                SyntaxFactory.ParenthesizedExpression(expression));
+        }
+
         var unparenthesized = WalkDownParentheses(expression);
         if (unparenthesized is PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression } logicalNot &&
             logicalNot.GetLeadingTrivia().Count == 0 &&

@@ -21,7 +21,7 @@ public sealed class PreferLoopContinueAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "Prefer a continue guard when a final if statement wraps the remaining work in a loop body.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {
@@ -33,7 +33,8 @@ public sealed class PreferLoopContinueAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
-        if (ifStatement.Else is not null ||
+        if (ifStatement.ContainsDiagnostics ||
+            ifStatement.Else is not null ||
             ifStatement.Statement is not BlockSyntax block ||
             block.Statements.Count == 0 ||
             ifStatement.ContainsDirectives)
@@ -68,6 +69,14 @@ public sealed class PreferLoopContinueAnalyzer : DiagnosticAnalyzer
         if (introducedNames.Count == 0 && introducedLabels.Count == 0)
         {
             return false;
+        }
+
+        foreach (var token in ifStatement.Condition.DescendantTokens())
+        {
+            if (token.IsKind(SyntaxKind.IdentifierToken) && introducedNames.Contains(token.ValueText))
+            {
+                return true;
+            }
         }
 
         var ifIndex = loopBody.Statements.IndexOf(ifStatement);

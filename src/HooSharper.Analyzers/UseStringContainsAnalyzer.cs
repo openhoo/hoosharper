@@ -21,7 +21,7 @@ public sealed class UseStringContainsAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "Contains expresses a string presence test directly when the exact IndexOf position is not used.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {

@@ -36,10 +36,10 @@ For unpublished changes, pass the local checkout path instead of
 ## Requirements
 
 - A C# project using an SDK-style project file
-- A Roslyn-capable editor or build environment, such as Visual Studio, Rider, VS Code with C# tooling, or `dotnet build`
+- A Roslyn 4.8 or newer editor/build host (such as the .NET 8 SDK), with C# tooling in Visual Studio, Rider, VS Code, or `dotnet build`
 - This repository requests .NET SDK 10.0.109 in `global.json` and allows `rollForward: latestPatch` within the .NET 10.0.1xx feature band
 
-The analyzer package targets `netstandard2.0` so it can run in a broad range of Roslyn hosts. Projects consuming the analyzer do not need to target .NET 10.
+The analyzer package targets `netstandard2.0` and is compiled against Roslyn 4.8. Projects consuming the analyzer do not need to target .NET 10; the compiler host must provide Roslyn 4.8 or newer. CI checks real consumers using .NET SDK 8.0.100 and the development SDK. Tests and benchmarks use newer Roslyn packages independently of the shipped assemblies.
 
 ## Installation
 
@@ -356,7 +356,7 @@ All rules below use category `HooSharper.CodeStyle`, default to Info severity, a
 | `HOO1019` | Use a `not` pattern | `!(x is string)` → `x is not string` |
 | `HOO1020` | Wrap long fluent chains | Place every continuation `.` at the start of its own line. |
 
-The analyzers deliberately skip ambiguous transformations, including overloaded equality operators, nullable boolean comparisons, unstable expressions with side effects, directive-containing regions, mismatched symbols, changed disposal scope, unavailable framework APIs, unsupported C# language versions, expression-tree-incompatible syntax, scope-expanding declaration collisions, dictionary indexer writes/by-reference uses, and collection arguments that comparer callbacks could mutate. Dictionary and set rules are restricted to standard framework types and callback-stable receivers, keys, and values.
+The analyzers deliberately skip ambiguous transformations, including overloaded equality operators, nullable boolean comparisons, unstable expressions with side effects, directive-containing regions, mismatched symbols, changed disposal scope, unavailable framework APIs, unsupported C# language versions, expression-tree-incompatible syntax, scope-expanding declaration collisions, dictionary indexer writes/by-reference uses, implicit callbacks before a dictionary read (including property getters and user-defined conversions/operators), and collection arguments that comparer callbacks could mutate. Dictionary and set rules are restricted to standard framework types and callback-stable receivers, keys, and values.
 
 #### Fluent-chain line length
 
@@ -503,6 +503,18 @@ The BenchmarkDotNet project measures real Roslyn analyzer and code-fix execution
 
 Benchmark methods report distinct timing scopes. `Registration` measures only `RegisterCodeFixesAsync` against a prepared fixture; `ComputeOperations` measures only code-action operation computation, with fixture creation, analysis, registration, and application outside the measured method; `ApplyOperations` measures only application, with fixture creation, analysis, registration, and operation computation outside the measured method. `DiscoverRegisterApply` measures the end-to-end fixture discovery, registration, operation computation, and application path. `DocumentFixAll` measures Fix All operation computation and application after fixture discovery, analysis, registration, and Fix All action creation in iteration setup. Registration-only timing therefore does not include analyzer discovery or fixture construction.
 
+Validate all analyzer workload shapes and individual/Fix All fixtures without collecting timings:
+
+```bash
+dotnet run --project benchmarks/HooSharper.Performance/HooSharper.Performance.csproj \
+  -c Release -- --validate-fixtures
+```
+
+This checks diagnostic counts in sequential and concurrent analysis, then verifies
+that individual fixes and Fix All leave compilable code. CI runs this check along
+with the analyzer tests. It is a correctness check; use the benchmark runs below
+to measure performance.
+
 List the available benchmarks:
 
 ```bash
@@ -555,6 +567,8 @@ The analyzer assembly is loaded by the compiler and IDE. The code-fix assembly i
 Inspect a locally produced package with:
 
 ```bash
+python3 scripts/verify-package.py artifacts/HooSharper.Analyzers.*.nupkg
+python3 scripts/verify-consumer.py artifacts/HooSharper.Analyzers.*.nupkg
 unzip -l artifacts/HooSharper.Analyzers.*.nupkg
 ```
 
@@ -564,7 +578,7 @@ CI follows the shared OpenHoo release model:
 
 1. `.github/workflows/ci.yml` runs on pull requests, pushes to `main`, and manual dispatches.
 2. Commitlint and Hooversion validate every commit in the complete pull-request or pushed commit range; manual dispatches validate the checked-out commit.
-3. The analyzer test project and its dependencies are restored and built with the SDK policy in `global.json`, its tests run with a line-coverage gate, and the analyzer package is packed.
+3. The solution, including benchmarks, is restored and built with the SDK policy in `global.json`. Analyzer tests run with a line-coverage gate; benchmark fixtures are checked for correctness; and the analyzer package is packed and checked for both assemblies, documentation, license, icon, matching version, and absence of runtime assets or dependencies. Real SDK consumers verify that HooSharper loads, enforces a diagnostic, and accepts corrected source under .NET 8 and the development SDK.
 4. A successful non-release push to `main` triggers `.github/workflows/release.yml`.
 5. Hooversion calculates the next semantic version, updates `version` and `CHANGELOG.md`, creates a `chore(release):` commit and `v<version>` tag, pushes both, and creates the GitHub Release.
 6. The tagged source is rebuilt, published to GitHub Packages, and attached to

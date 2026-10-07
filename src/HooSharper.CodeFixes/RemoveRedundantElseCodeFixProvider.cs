@@ -17,7 +17,7 @@ namespace HooSharper.CodeFixes;
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(RemoveRedundantElseCodeFixProvider)), Shared]
 public sealed class RemoveRedundantElseCodeFixProvider : CodeFixProvider
 {
-    public override ImmutableArray<string> FixableDiagnosticIds => [RemoveRedundantElseAnalyzer.DiagnosticId];
+    public override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(RemoveRedundantElseAnalyzer.DiagnosticId);
 
     public override FixAllProvider GetFixAllProvider() => WellKnownFixAllProviders.BatchFixer;
 
@@ -83,7 +83,10 @@ public sealed class RemoveRedundantElseCodeFixProvider : CodeFixProvider
         var statementWithoutElse = ifStatement.WithElse(null)
             .WithAdditionalAnnotations(Formatter.Annotation);
 
-        if (elseClause.Statement is BlockSyntax scopedBlock && RequiresPreservedScope(scopedBlock))
+        if (elseClause.Statement is BlockSyntax scopedBlock &&
+            (RequiresPreservedScope(scopedBlock) || scopedBlock.Statements.Count == 0 &&
+             elseClause.DescendantTrivia().Any(item =>
+                 !item.IsKind(SyntaxKind.WhitespaceTrivia) && !item.IsKind(SyntaxKind.EndOfLineTrivia))))
         {
             var elseTrivia = SignificantTrivia(elseClause.ElseKeyword.LeadingTrivia)
                 .AddRange(SignificantTrivia(elseClause.ElseKeyword.TrailingTrivia));

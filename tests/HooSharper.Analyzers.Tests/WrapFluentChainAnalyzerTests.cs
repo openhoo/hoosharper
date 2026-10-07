@@ -549,4 +549,23 @@ public sealed class WrapFluentChainAnalyzerTests
 
         return test.RunAsync(TestContext.Current.CancellationToken);
     }
+    [Fact]
+    public Task IgnoresIncompleteFluentChainInEditor()
+    {
+        const string source = """
+            class Example
+            {
+                string Run(string value) => value.Trim().ToUpperInvariant().PadRight(200).;
+            }
+            """;
+        var test = new ConfigTest
+        {
+            TestCode = source,
+            CompilerDiagnostics = CompilerDiagnostics.None,
+        };
+        test.TestState.AnalyzerConfigFiles.Add(("/.editorconfig",
+            "root = true\n\n[*.cs]\nhoosharper_max_line_length = 40"));
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
+
 }

@@ -447,4 +447,43 @@ public sealed class UseTypePatternAnalyzerTests
 
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
     }
+    [Fact]
+    public Task PreservesCommentsInsideRemovedDeclarationAndNullCheck()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(object value)
+                {
+                    var /* local */ text /* assignment */ = /* cast */ value {|#0:as|} string /* type */;
+                    if (text /* check */ is not /* null */ null)
+                    {
+                        System.Console.WriteLine(text);
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(object value)
+                {
+                    /* local */
+                    /* assignment */
+                    /* cast */
+                    /* check */
+                    /* null */
+                    if (value is string /* type */text)
+                    {
+                        System.Console.WriteLine(text);
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(UseTypePatternAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
 }

@@ -22,7 +22,7 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "Replace a classic argument null guard with ArgumentNullException.ThrowIfNull.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {

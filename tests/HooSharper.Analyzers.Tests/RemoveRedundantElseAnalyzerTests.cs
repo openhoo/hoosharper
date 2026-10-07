@@ -571,4 +571,39 @@ public sealed class RemoveRedundantElseAnalyzerTests
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
     }
 
+
+    [Fact]
+    public Task PreservesCommentsInEmptyElseBlock()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool done)
+                {
+                    if (done)
+                        return;
+                    {|#0:else|}
+                    {
+                        // intentionally empty fallback
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool done)
+                {
+                    if (done)
+                        return;
+                    {
+                        // intentionally empty fallback
+                    }
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(RemoveRedundantElseAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
 }

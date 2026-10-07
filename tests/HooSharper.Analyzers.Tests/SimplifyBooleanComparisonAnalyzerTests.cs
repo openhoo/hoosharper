@@ -208,4 +208,129 @@ public sealed class SimplifyBooleanComparisonAnalyzerTests
 
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
+
+    [Theory]
+    [InlineData("&&")]
+    [InlineData("||")]
+    [InlineData("&")]
+    [InlineData("|")]
+    [InlineData("^")]
+    public Task DoesNotRewriteLogicalOperatorsInsideComparison(string operation)
+    {
+        var source = $$"""
+            class Example
+            {
+                bool Run(bool value) => (value {{operation}} true) {|#0:==|} true;
+            }
+            """;
+        var fixedSource = $$"""
+            class Example
+            {
+                bool Run(bool value) => (value {{operation}} true);
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(SimplifyBooleanComparisonAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+    [Fact]
+    public Task ReportsEqualityInsideLiteralLogicalParent()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(bool value) => (value {|#0:==|} false) && true;
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                bool Run(bool value) => (!value) && true;
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(SimplifyBooleanComparisonAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+    [Fact]
+    public Task RetainsGroupingAfterRemovingNegation()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(bool left, bool right, bool ready) => !(left || right) {|#0:==|} false && ready;
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                bool Run(bool left, bool right, bool ready) => (left || right) && ready;
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(SimplifyBooleanComparisonAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+    [Fact]
+    public Task PreservesCommentInsideNegatedParentheses()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(bool value) => (/* audit */ value) {|#0:==|} false;
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                bool Run(bool value) => !((/* audit */ value));
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(SimplifyBooleanComparisonAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+
+    [Theory]
+    [InlineData("true {|#0:==|} false", "!(true)")]
+    [InlineData("true {|#0:!=|} false", "true")]
+    [InlineData("false {|#0:==|} true", "false")]
+    [InlineData("false {|#0:!=|} true", "!(false)")]
+    public Task SimplifiesComparisonsOfTwoLiteralsCorrectly(string comparison, string replacement)
+    {
+        var source = $$"""
+            class Example
+            {
+                bool Run() => {{comparison}};
+            }
+            """;
+        var fixedSource = $$"""
+            class Example
+            {
+                bool Run() => {{replacement}};
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(SimplifyBooleanComparisonAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+    [Fact]
+    public Task PreservesExteriorCommentsExactlyOnce()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(bool value) => /* before */ value {|#0:==|} true /* after */;
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                bool Run(bool value) => /* before */ value /* after */;
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(SimplifyBooleanComparisonAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
 }

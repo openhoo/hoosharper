@@ -17,7 +17,7 @@ namespace HooSharper.CodeFixes;
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(UseTypePatternCodeFixProvider)), Shared]
 public sealed class UseTypePatternCodeFixProvider : CodeFixProvider
 {
-    public override ImmutableArray<string> FixableDiagnosticIds => [UseTypePatternAnalyzer.DiagnosticId];
+    public override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(UseTypePatternAnalyzer.DiagnosticId);
 
     public override FixAllProvider GetFixAllProvider() => WellKnownFixAllProviders.BatchFixer;
 
@@ -87,6 +87,7 @@ public sealed class UseTypePatternCodeFixProvider : CodeFixProvider
             .WithCondition(condition)
             .WithLeadingTrivia(
                 declaration.GetLeadingTrivia()
+                    .AddRange(GetRemovedComments(declaration, asExpression, ifStatement.Condition))
                     .AddRange(KeepComments(declaration.GetTrailingTrivia()))
                     .AddRange(ifStatement.GetLeadingTrivia()))
             .WithAdditionalAnnotations(Formatter.Annotation);
@@ -103,6 +104,27 @@ public sealed class UseTypePatternCodeFixProvider : CodeFixProvider
             QueryExpressionSyntax or SwitchExpressionSyntax
             ? SyntaxFactory.ParenthesizedExpression(expression.WithoutTrivia()).WithTriviaFrom(expression)
             : expression;
+
+    private static SyntaxTriviaList GetRemovedComments(
+        LocalDeclarationStatementSyntax declaration,
+        BinaryExpressionSyntax asExpression,
+        ExpressionSyntax condition)
+    {
+        var result = SyntaxFactory.TriviaList();
+        foreach (var trivia in declaration.DescendantTrivia().Concat(condition.DescendantTrivia()))
+        {
+            if ((trivia.IsKind(SyntaxKind.SingleLineCommentTrivia) ||
+                 trivia.IsKind(SyntaxKind.MultiLineCommentTrivia)) &&
+                ((declaration.Span.Contains(trivia.Span) &&
+                  !asExpression.Span.Contains(trivia.Span) && !asExpression.Right.FullSpan.Contains(trivia.Span)) ||
+                 condition.Span.Contains(trivia.Span)))
+            {
+                result = result.Add(trivia).Add(SyntaxFactory.ElasticCarriageReturnLineFeed);
+            }
+        }
+
+        return result;
+    }
 
     private static SyntaxTriviaList KeepComments(SyntaxTriviaList trivia)
     {

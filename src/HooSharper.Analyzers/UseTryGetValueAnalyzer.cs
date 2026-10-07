@@ -21,7 +21,7 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "TryGetValue performs a single dictionary lookup and provides the matching value.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {
@@ -357,6 +357,14 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
         IOperation? keyOperation,
         System.Threading.CancellationToken cancellationToken)
     {
+        // Getters, conversions, operators, and implicit enumeration/disposal can
+        // execute user code just like explicit calls. Moving the lookup ahead of
+        // those callbacks would snapshot a value before they can update it.
+        if (HasPotentialCallback(semanticModel.GetOperation(statement, cancellationToken), dictionary, key))
+        {
+            return true;
+        }
+
         foreach (var node in statement.DescendantNodes(ShouldDescendInto))
         {
             if (node is AssignmentExpressionSyntax assignment &&
@@ -388,7 +396,54 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
                 return true;
             }
 
-            if (node is InvocationExpressionSyntax or ObjectCreationExpressionSyntax or ImplicitObjectCreationExpressionSyntax or AwaitExpressionSyntax)
+            if (node is InvocationExpressionSyntax or ObjectCreationExpressionSyntax or ImplicitObjectCreationExpressionSyntax or AwaitExpressionSyntax or YieldStatementSyntax)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasPotentialCallback(
+        IOperation? operation,
+        ExpressionSyntax dictionary,
+        ExpressionSyntax key)
+    {
+        if (operation is null or IAnonymousFunctionOperation or ILocalFunctionOperation)
+        {
+            return false;
+        }
+
+        if (operation is IInvocationOperation or IObjectCreationOperation or IAwaitOperation or
+            IDynamicInvocationOperation or IDynamicIndexerAccessOperation or IDynamicMemberReferenceOperation or
+            IForEachLoopOperation or IUsingOperation or IUsingDeclarationOperation or
+            IDeconstructionAssignmentOperation or IRecursivePatternOperation or IListPatternOperation or
+            IInterpolatedStringOperation or IEventAssignmentOperation ||
+            operation is IConversionOperation { OperatorMethod: not null } ||
+            operation is IBinaryOperation { OperatorMethod: not null } ||
+            operation is IUnaryOperation { OperatorMethod: not null } ||
+            operation is ICompoundAssignmentOperation { OperatorMethod: not null } ||
+            operation is IIncrementOrDecrementOperation { OperatorMethod: not null } ||
+            operation is IConversionOperation { Operand.Type.TypeKind: TypeKind.Dynamic } ||
+            operation is IBinaryOperation { LeftOperand.Type.TypeKind: TypeKind.Dynamic } ||
+            operation is IBinaryOperation { RightOperand.Type.TypeKind: TypeKind.Dynamic } ||
+            operation is IUnaryOperation { Operand.Type.TypeKind: TypeKind.Dynamic })
+        {
+            return true;
+        }
+
+        if (operation is IPropertyReferenceOperation property &&
+            !(property.Syntax is ElementAccessExpressionSyntax { ArgumentList.Arguments.Count: 1 } access &&
+              IsSameExpression(access.Expression, dictionary) &&
+              IsSameExpression(access.ArgumentList.Arguments[0].Expression, key)))
+        {
+            return true;
+        }
+
+        foreach (var child in operation.ChildOperations)
+        {
+            if (HasPotentialCallback(child, dictionary, key))
             {
                 return true;
             }
