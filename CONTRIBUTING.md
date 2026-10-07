@@ -24,3 +24,11 @@ Commits use Conventional Commits. Pull requests must explain compatibility and
 diagnostic impact. Maintainers squash-merge using the Conventional Commit pull
 request title. Lockfile and analyzer-release metadata changes must accompany
 their source changes.
+
+## Release pull requests
+
+Preserve the generated Hooversion release commit subject, including the package
+name, when squash-merging a release pull request (for example,
+`chore(release): HooSharper.Analyzers 0.3.11`). Preserve its generated release
+notes as the squash commit body. Hooversion uses this message to resume tagging
+and publication without creating another version commit.
