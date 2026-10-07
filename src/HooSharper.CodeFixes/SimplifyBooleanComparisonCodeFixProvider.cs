@@ -17,7 +17,7 @@ namespace HooSharper.CodeFixes;
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(SimplifyBooleanComparisonCodeFixProvider)), Shared]
 public sealed class SimplifyBooleanComparisonCodeFixProvider : CodeFixProvider
 {
-    public override ImmutableArray<string> FixableDiagnosticIds => [SimplifyBooleanComparisonAnalyzer.DiagnosticId];
+    public override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(SimplifyBooleanComparisonAnalyzer.DiagnosticId);
 
     public override FixAllProvider GetFixAllProvider() => WellKnownFixAllProviders.BatchFixer;
 
@@ -73,7 +73,8 @@ public sealed class SimplifyBooleanComparisonCodeFixProvider : CodeFixProvider
         public override SyntaxNode? VisitBinaryExpression(BinaryExpressionSyntax node)
         {
             var visited = (BinaryExpressionSyntax)base.VisitBinaryExpression(node)!;
-            if (!TryGetBooleanLiteralOperand(visited, out var expression) ||
+            if (node.ContainsDirectives || node.ContainsDiagnostics ||
+                !TryGetBooleanLiteralOperand(visited, out var expression) ||
                 !IsSafeComparison(semanticModel.GetOperation(node, cancellationToken)))
             {
                 return visited;
@@ -87,9 +88,7 @@ public sealed class SimplifyBooleanComparisonCodeFixProvider : CodeFixProvider
         BinaryExpressionSyntax comparison,
         ExpressionSyntax expression)
     {
-        var literal = comparison.Left.IsKind(SyntaxKind.TrueLiteralExpression)
-            ? comparison.Left
-            : comparison.Right;
+        var literal = expression == comparison.Left ? comparison.Right : comparison.Left;
         var literalValue = literal.IsKind(SyntaxKind.TrueLiteralExpression);
         var preserveValue = comparison.IsKind(SyntaxKind.EqualsExpression) == literalValue;
         var expressionWithoutOuterTrivia = expression.WithoutLeadingTrivia().WithoutTrailingTrivia();
@@ -117,6 +116,7 @@ public sealed class SimplifyBooleanComparisonCodeFixProvider : CodeFixProvider
     {
         var trivia = comparison.DescendantTrivia()
             .Where(item =>
+                comparison.Span.Contains(item.Span) &&
                 !expression.Span.Contains(item.Span) &&
                 !item.IsKind(SyntaxKind.WhitespaceTrivia) &&
                 !item.IsKind(SyntaxKind.EndOfLineTrivia));
@@ -136,10 +136,21 @@ public sealed class SimplifyBooleanComparisonCodeFixProvider : CodeFixProvider
 
     private static ExpressionSyntax Negate(ExpressionSyntax expression)
     {
+        // Preserve parenthesis trivia by retaining the original expression whenever
+        // any removed token carries a comment.
+        if (expression.DescendantTrivia().Any(item =>
+            !item.IsKind(SyntaxKind.WhitespaceTrivia) && !item.IsKind(SyntaxKind.EndOfLineTrivia)))
+        {
+            return SyntaxFactory.PrefixUnaryExpression(
+                SyntaxKind.LogicalNotExpression,
+                SyntaxFactory.ParenthesizedExpression(expression));
+        }
+
         var unparenthesized = WalkDownParentheses(expression);
         if (unparenthesized is PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression } logicalNot)
         {
-            return WalkDownParentheses(logicalNot.Operand).WithoutLeadingTrivia().WithoutTrailingTrivia();
+            // The operand's parentheses can be required by the surrounding expression.
+            return logicalNot.Operand.WithoutLeadingTrivia().WithoutTrailingTrivia();
         }
 
         return SyntaxFactory.PrefixUnaryExpression(
@@ -163,6 +174,13 @@ public sealed class SimplifyBooleanComparisonCodeFixProvider : CodeFixProvider
         BinaryExpressionSyntax comparison,
         out ExpressionSyntax expression)
     {
+        if (!comparison.IsKind(SyntaxKind.EqualsExpression) &&
+            !comparison.IsKind(SyntaxKind.NotEqualsExpression))
+        {
+            expression = null!;
+            return false;
+        }
+
         if (IsBooleanLiteral(comparison.Right))
         {
             expression = comparison.Left;

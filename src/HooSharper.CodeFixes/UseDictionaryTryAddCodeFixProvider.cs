@@ -16,7 +16,7 @@ namespace HooSharper.CodeFixes;
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(UseDictionaryTryAddCodeFixProvider)), Shared]
 public sealed class UseDictionaryTryAddCodeFixProvider : CodeFixProvider
 {
-    public override ImmutableArray<string> FixableDiagnosticIds => [UseDictionaryTryAddAnalyzer.DiagnosticId];
+    public override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(UseDictionaryTryAddAnalyzer.DiagnosticId);
 
     public override FixAllProvider GetFixAllProvider() => WellKnownFixAllProviders.BatchFixer;
 
@@ -48,7 +48,6 @@ public sealed class UseDictionaryTryAddCodeFixProvider : CodeFixProvider
         if (root is null ||
             ifStatement.Condition is not PrefixUnaryExpressionSyntax
             {
-                OperatorToken: var notToken,
                 Operand: InvocationExpressionSyntax
                 {
                     Expression: MemberAccessExpressionSyntax containsMember,
@@ -77,15 +76,15 @@ public sealed class UseDictionaryTryAddCodeFixProvider : CodeFixProvider
                 .AddRange(CommentLines(ifStatement.IfKeyword.TrailingTrivia))
                 .AddRange(CommentLines(ifStatement.OpenParenToken.LeadingTrivia))
                 .AddRange(CommentLines(ifStatement.OpenParenToken.TrailingTrivia))
-                .AddRange(CommentLines(notToken.LeadingTrivia))
-                .AddRange(CommentLines(notToken.TrailingTrivia))
                 .AddRange(CommentLines(ifStatement.CloseParenToken.LeadingTrivia))
                 .AddRange(CommentLines(ifStatement.CloseParenToken.TrailingTrivia))
-                .AddRange(CommentLines(ifStatement.Condition.DescendantTrivia(descendIntoTrivia: true)))
+                .AddRange(CommentLines(ifStatement.Condition.DescendantTrivia(descendIntoTrivia: true)
+                    .Where(trivia => !containsMember.Span.Contains(trivia.Span))))
                 .AddRange(CommentLines(block.OpenBraceToken.LeadingTrivia))
                 .AddRange(CommentLines(block.OpenBraceToken.TrailingTrivia))
                 .AddRange(addStatement.GetLeadingTrivia())
-                .AddRange(CommentLines(addInvocation.Expression.DescendantTrivia(descendIntoTrivia: true)));
+                .AddRange(CommentLines(addInvocation.Expression.DescendantTrivia(descendIntoTrivia: true)
+                    .Where(trivia => addInvocation.Expression.Span.Contains(trivia.Span))));
             var trailingTrivia = InlineComments(addStatement.GetTrailingTrivia())
                 .Add(SyntaxFactory.LineFeed)
                 .AddRange(CommentLines(block.CloseBraceToken.LeadingTrivia))
@@ -98,8 +97,8 @@ public sealed class UseDictionaryTryAddCodeFixProvider : CodeFixProvider
             return document.WithSyntaxRoot(root.ReplaceNode(ifStatement, replacement));
         }
 
-        var conditionLeadingTrivia = InlineComments(notToken.LeadingTrivia)
-            .AddRange(InlineComments(notToken.TrailingTrivia));
+        var conditionLeadingTrivia = ConditionComments(ifStatement.Condition.DescendantTrivia(descendIntoTrivia: true)
+            .Where(trivia => !containsMember.Span.Contains(trivia.Span)));
         var updatedCondition = tryAddInvocation.WithoutTrivia().WithLeadingTrivia(conditionLeadingTrivia);
         var remainingStatements = block.Statements.RemoveAt(0);
         var firstRemaining = remainingStatements[0];
@@ -127,6 +126,24 @@ public sealed class UseDictionaryTryAddCodeFixProvider : CodeFixProvider
             if (item.IsKind(SyntaxKind.SingleLineCommentTrivia) || item.IsKind(SyntaxKind.MultiLineCommentTrivia))
             {
                 result = result.Add(item).Add(SyntaxFactory.ElasticCarriageReturnLineFeed);
+            }
+        }
+
+        return result;
+    }
+
+    private static SyntaxTriviaList ConditionComments(System.Collections.Generic.IEnumerable<SyntaxTrivia> trivia)
+    {
+        var result = SyntaxFactory.TriviaList();
+        foreach (var item in trivia)
+        {
+            if (item.IsKind(SyntaxKind.SingleLineCommentTrivia) || item.IsKind(SyntaxKind.MultiLineCommentTrivia))
+            {
+                result = result.Add(SyntaxFactory.Space).Add(item);
+                if (item.IsKind(SyntaxKind.SingleLineCommentTrivia))
+                {
+                    result = result.Add(SyntaxFactory.ElasticCarriageReturnLineFeed);
+                }
             }
         }
 

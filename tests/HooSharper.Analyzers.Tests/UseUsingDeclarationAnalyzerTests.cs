@@ -820,4 +820,28 @@ public sealed class UseUsingDeclarationAnalyzerTests
                     .WithLanguageVersion(LanguageVersion.CSharp8)));
         return test.RunAsync(TestContext.Current.CancellationToken);
     }
+    [Fact]
+    public Task DoesNotReportInitializerBindingToMovedLocalVariable()
+    {
+        const string source = """
+            using System.IO;
+
+            class Example
+            {
+                readonly byte[] bytes = new byte[1];
+
+                void Run()
+                {
+                    using (var stream = new MemoryStream(bytes))
+                    {
+                        var bytes = new byte[2];
+                        stream.Write(bytes);
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
 }

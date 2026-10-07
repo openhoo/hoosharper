@@ -22,7 +22,7 @@ public sealed class UseHashSetAddResultAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "HashSet.Add reports whether the value was newly added, avoiding a separate lookup.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {

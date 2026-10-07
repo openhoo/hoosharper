@@ -525,6 +525,15 @@ internal static class FixerBenchmarkFixture
 
         return new ApplicationResult(operationCount, changedText.Length, ComputeChecksum(changedText));
     }
+    public static async Task ValidateAppliedCompilationAsync(ActionState state)
+    {
+        var changedDocument = state.Fixture.Workspace.CurrentSolution.GetDocument(state.Fixture.Document.Id)
+            ?? throw new InvalidOperationException("The changed document is missing from the workspace.");
+        var compilation = await changedDocument.Project.GetCompilationAsync().ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The changed project compilation is missing.");
+        RoslynFixture.ValidateNoCompilerErrors(compilation);
+    }
+
     public static async Task ValidateFixAllResultAsync(FixAllState state)
     {
         var changedDocument = state.ActionState.Fixture.Workspace.CurrentSolution.GetDocument(
@@ -532,6 +541,7 @@ internal static class FixerBenchmarkFixture
             ?? throw new InvalidOperationException("The changed document is missing from the workspace.");
         var compilation = await changedDocument.Project.GetCompilationAsync().ConfigureAwait(false)
             ?? throw new InvalidOperationException("The changed project compilation is missing.");
+        RoslynFixture.ValidateNoCompilerErrors(compilation);
         var diagnostics = await compilation.WithAnalyzers(
                 [state.ActionState.Fixture.Analyzer],
                 new CompilationWithAnalyzersOptions(

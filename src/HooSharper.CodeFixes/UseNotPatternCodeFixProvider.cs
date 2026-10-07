@@ -16,7 +16,7 @@ namespace HooSharper.CodeFixes;
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(UseNotPatternCodeFixProvider)), Shared]
 public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
 {
-    public override ImmutableArray<string> FixableDiagnosticIds => [UseNotPatternAnalyzer.DiagnosticId];
+    public override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(UseNotPatternAnalyzer.DiagnosticId);
 
     public override FixAllProvider GetFixAllProvider() => WellKnownFixAllProviders.BatchFixer;
 
@@ -52,7 +52,13 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
             return document;
         }
 
-        var rewrittenTarget = (ExpressionSyntax)new NestedNotPatternRewriter().Visit(target)!;
+        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+        if (semanticModel is null)
+        {
+            return document;
+        }
+
+        var rewrittenTarget = (ExpressionSyntax)new NestedNotPatternRewriter(semanticModel, cancellationToken).Visit(target)!;
         var replacement = CreatePatternReplacement(logicalNot, rewrittenTarget, isKeyword, pattern);
         return document.WithSyntaxRoot(root.ReplaceNode(logicalNot, replacement));
     }
@@ -86,14 +92,67 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
             .WithTrailingTrivia(trailingTrivia);
     }
 
-    private sealed class NestedNotPatternRewriter : CSharpSyntaxRewriter
+    private sealed class NestedNotPatternRewriter(
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken) : CSharpSyntaxRewriter
     {
         public override SyntaxNode? VisitPrefixUnaryExpression(PrefixUnaryExpressionSyntax node)
         {
+            // Check the original tree before visiting: rewritten nodes cannot be
+            // queried through the original semantic model.
+            var canRewrite = TryGetParts(node, out var originalTarget, out _, out _) &&
+                !IsWithinExpressionTree(node) && IsSupportedTypeTest(node, originalTarget);
             var visited = (PrefixUnaryExpressionSyntax)base.VisitPrefixUnaryExpression(node)!;
-            return TryGetParts(visited, out var target, out var isKeyword, out var pattern)
+            return canRewrite && TryGetParts(visited, out var target, out var isKeyword, out var pattern)
                 ? CreatePatternReplacement(visited, target, isKeyword, pattern)
                 : visited;
+        }
+
+        private bool IsWithinExpressionTree(SyntaxNode node)
+        {
+            var expressionType = semanticModel.Compilation.GetTypeByMetadataName("System.Linq.Expressions.Expression`1");
+            var queryableType = semanticModel.Compilation.GetTypeByMetadataName("System.Linq.IQueryable");
+            for (var ancestor = node.Parent; ancestor is not null; ancestor = ancestor.Parent)
+            {
+                if (expressionType is not null && ancestor is AnonymousFunctionExpressionSyntax lambda &&
+                    semanticModel.GetTypeInfo(lambda, cancellationToken).ConvertedType is INamedTypeSymbol lambdaType &&
+                    SymbolEqualityComparer.Default.Equals(lambdaType.OriginalDefinition, expressionType))
+                {
+                    return true;
+                }
+
+                if (queryableType is not null && ancestor is QueryExpressionSyntax query &&
+                    semanticModel.GetTypeInfo(query, cancellationToken).Type is INamedTypeSymbol queryType &&
+                    (SymbolEqualityComparer.Default.Equals(queryType.OriginalDefinition, queryableType) ||
+                     queryType.AllInterfaces.Any(type => SymbolEqualityComparer.Default.Equals(
+                         type.OriginalDefinition, queryableType))))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool IsSupportedTypeTest(PrefixUnaryExpressionSyntax node, ExpressionSyntax target)
+        {
+            var expression = ((ParenthesizedExpressionSyntax)node.Operand).Expression;
+            var type = expression switch
+            {
+                IsPatternExpressionSyntax { Pattern: TypePatternSyntax pattern } => pattern.Type,
+                BinaryExpressionSyntax { Right: TypeSyntax testedType } => testedType,
+                _ => null,
+            };
+            if (type is null)
+            {
+                return true;
+            }
+
+            var targetType = semanticModel.GetTypeInfo(target, cancellationToken).Type;
+            var matchedType = semanticModel.GetTypeInfo(type, cancellationToken).Type;
+            return targetType is null || matchedType is null || !targetType.IsValueType ||
+                targetType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T ||
+                !SymbolEqualityComparer.Default.Equals(targetType, matchedType);
         }
     }
 

@@ -107,7 +107,6 @@ public sealed class UseDictionaryTryAddAnalyzerTests
                     /* after condition */
                     // opening brace
                     // before Add
-                    // before Add
                     /* on Add */
                     dictionary.TryAdd(key, value); // after Add
                                                    // closing brace
@@ -784,5 +783,79 @@ public sealed class UseDictionaryTryAddAnalyzerTests
 
 
 
+
+    [Fact]
+    public Task PreservesReceiverAndArgumentCommentsExactlyOnce()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            class Example
+            {
+                void Run(string key, int value)
+                {
+                    var dictionary = new Dictionary<string, int>();
+                    if (!dictionary./* receiver */{|#0:ContainsKey|}(/* lookup key */ key))
+                    {
+                        // insertion
+                        dictionary.Add(key, value);
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+            class Example
+            {
+                void Run(string key, int value)
+                {
+                    var dictionary = new Dictionary<string, int>();
+                    /* lookup key */
+                    // insertion
+                    dictionary./* receiver */TryAdd(key, value);
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(UseDictionaryTryAddAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+    [Fact]
+    public Task PreservesLookupArgumentCommentWithRemainingBody()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            class Example
+            {
+                void Run(string key)
+                {
+                    var dictionary = new Dictionary<string, int>();
+                    if (!dictionary.{|#0:ContainsKey|}(/* lookup key */ key))
+                    {
+                        dictionary.Add(key, 1);
+                        Consume();
+                    }
+                }
+                void Consume() { }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+            class Example
+            {
+                void Run(string key)
+                {
+                    var dictionary = new Dictionary<string, int>();
+                    if ( /* lookup key */dictionary.TryAdd(key, 1))
+                    {
+                        Consume();
+                    }
+                }
+                void Consume() { }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(UseDictionaryTryAddAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
 
 }

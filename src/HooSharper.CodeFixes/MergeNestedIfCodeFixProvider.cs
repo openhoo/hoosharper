@@ -17,7 +17,7 @@ namespace HooSharper.CodeFixes;
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(MergeNestedIfCodeFixProvider)), Shared]
 public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
 {
-    public override ImmutableArray<string> FixableDiagnosticIds => [MergeNestedIfAnalyzer.DiagnosticId];
+    public override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(MergeNestedIfAnalyzer.DiagnosticId);
 
     public override FixAllProvider GetFixAllProvider() => WellKnownFixAllProviders.BatchFixer;
 
@@ -75,7 +75,7 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
                 SyntaxKind.LogicalAndExpression,
                 combinedCondition,
                 SyntaxFactory.Token(SyntaxKind.AmpersandAmpersandToken),
-                PrepareOperand(deepestIf.Condition));
+                PrepareOperand(deepestIf.Condition, isRightOperand: true));
 
             if (!TryGetInnerIf(deepestIf, out var nextIf))
             {
@@ -127,11 +127,18 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
         var leading = outerIf.GetLeadingTrivia();
         var indentation = SyntaxFactory.TriviaList(
             leading.Where(static trivia => trivia.IsKind(SyntaxKind.WhitespaceTrivia)));
+        var conditions = new List<ExpressionSyntax> { outerIf.Condition };
+        var current = outerIf;
+        while (TryGetInnerIf(current, out var nested))
+        {
+            conditions.Add(nested.Condition);
+            current = nested;
+        }
+
         var comments = outerIf.DescendantTrivia(descendIntoTrivia: true)
             .Where(trivia => outerIf.Span.Contains(trivia.Span) &&
                 IsComment(trivia) &&
-                !outerIf.Condition.Span.Contains(trivia.Span) &&
-                !innerIf.Condition.Span.Contains(trivia.Span) &&
+                !conditions.Any(condition => condition.Span.Contains(trivia.Span)) &&
                 !deepestIf.Statement.FullSpan.Contains(trivia.Span));
 
         foreach (var comment in comments)

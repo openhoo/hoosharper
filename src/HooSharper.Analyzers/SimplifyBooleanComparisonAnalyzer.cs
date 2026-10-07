@@ -22,7 +22,7 @@ public sealed class SimplifyBooleanComparisonAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "Comparisons between a non-nullable bool expression and a boolean literal can be simplified.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {
@@ -37,7 +37,8 @@ public sealed class SimplifyBooleanComparisonAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeComparison(SyntaxNodeAnalysisContext context)
     {
         var comparison = (BinaryExpressionSyntax)context.Node;
-        if (!TryGetBooleanLiteralOperand(comparison, out _))
+        if (comparison.ContainsDirectives || comparison.ContainsDiagnostics ||
+            !TryGetBooleanLiteralOperand(comparison, out _))
         {
             return;
         }
@@ -86,6 +87,13 @@ public sealed class SimplifyBooleanComparisonAnalyzer : DiagnosticAnalyzer
         BinaryExpressionSyntax comparison,
         out ExpressionSyntax expression)
     {
+        if (!comparison.IsKind(SyntaxKind.EqualsExpression) &&
+            !comparison.IsKind(SyntaxKind.NotEqualsExpression))
+        {
+            expression = null!;
+            return false;
+        }
+
         if (IsBooleanLiteral(comparison.Right))
         {
             expression = comparison.Left;

@@ -22,7 +22,7 @@ public sealed class MergeNestedIfAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "Combine nested if statements without else branches into a single condition.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {
@@ -34,7 +34,8 @@ public sealed class MergeNestedIfAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
     {
         var outerIf = (IfStatementSyntax)context.Node;
-        if (!TryGetInnerIf(outerIf, out var innerIf) ||
+        if (outerIf.ContainsDiagnostics ||
+            !TryGetInnerIf(outerIf, out var innerIf) ||
             outerIf.ContainsDirectives ||
             IsNestedEligibleIf(outerIf) ||
             !AreAllConditionsOrdinaryBoolean(context, outerIf) ||
@@ -68,22 +69,37 @@ public sealed class MergeNestedIfAnalyzer : DiagnosticAnalyzer
     {
         var introducedNames = new HashSet<string>();
         var current = outerIf;
+        var precedingConditions = new List<ExpressionSyntax> { outerIf.Condition };
         while (TryGetInnerIf(current, out var innerIf))
         {
             foreach (var node in innerIf.Condition.DescendantNodesAndSelf())
             {
                 if (node is SingleVariableDesignationSyntax designation)
                 {
-                    introducedNames.Add(designation.Identifier.ValueText);
+                    var name = designation.Identifier.ValueText;
+                    if (precedingConditions.Any(condition => condition.DescendantTokens().Any(token =>
+                        token.IsKind(SyntaxKind.IdentifierToken) && token.ValueText == name)))
+                    {
+                        return true;
+                    }
+
+                    introducedNames.Add(name);
                 }
             }
 
+            precedingConditions.Add(innerIf.Condition);
             current = innerIf;
         }
 
         if (introducedNames.Count == 0)
         {
             return false;
+        }
+
+        if (outerIf.Condition.DescendantTokens().Any(token =>
+            token.IsKind(SyntaxKind.IdentifierToken) && introducedNames.Contains(token.ValueText)))
+        {
+            return true;
         }
 
         if (outerIf.Parent is BlockSyntax containingBlock)
@@ -113,7 +129,9 @@ public sealed class MergeNestedIfAnalyzer : DiagnosticAnalyzer
                         _ => null,
                     };
 
-                    if (name is not null && introducedNames.Contains(name))
+                    if (node is IdentifierNameSyntax identifier && introducedNames.Contains(identifier.Identifier.ValueText) ||
+                        node is GenericNameSyntax generic && introducedNames.Contains(generic.Identifier.ValueText) ||
+                        name is not null && introducedNames.Contains(name))
                     {
                         return true;
                     }
@@ -148,7 +166,9 @@ public sealed class MergeNestedIfAnalyzer : DiagnosticAnalyzer
                     _ => null,
                 };
 
-                if (name is not null && introducedNames.Contains(name))
+                if (node is IdentifierNameSyntax identifier && introducedNames.Contains(identifier.Identifier.ValueText) ||
+                    node is GenericNameSyntax generic && introducedNames.Contains(generic.Identifier.ValueText) ||
+                    name is not null && introducedNames.Contains(name))
                 {
                     return true;
                 }

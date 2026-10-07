@@ -486,4 +486,23 @@ public sealed class UseNullConditionalAccessAnalyzerTests
 
         return test.RunAsync(TestContext.Current.CancellationToken);
     }
+    [Fact]
+    public Task DoesNotReportInsideImplicitQueryableExpressionTree()
+    {
+        const string source = """
+            using System.Linq;
+
+            class Example
+            {
+                IQueryable<string> Run(IQueryable<Example> values) =>
+                    from value in values
+                    select value == null ? null : value.Name;
+
+                public string Name { get; set; } = "";
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
 }

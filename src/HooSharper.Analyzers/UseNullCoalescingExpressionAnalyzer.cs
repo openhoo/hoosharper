@@ -21,7 +21,7 @@ public sealed class UseNullCoalescingExpressionAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "Replace a conditional null check with the null-coalescing operator.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {

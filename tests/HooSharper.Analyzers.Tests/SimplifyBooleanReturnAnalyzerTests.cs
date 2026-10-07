@@ -379,4 +379,64 @@ public sealed class SimplifyBooleanReturnAnalyzerTests
 
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
+
+    [Fact]
+    public Task PreservesLeadingCommentExactlyOnce()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(bool value)
+                {
+                    // explain the result
+                    {|#0:if|} (value)
+                        return true;
+                    return false;
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                bool Run(bool value)
+                {
+                    // explain the result
+                    return value;
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(SimplifyBooleanReturnAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+
+    [Theory]
+    [InlineData("((value))", "!value")]
+    [InlineData("(/* note */ value)", "!((/* note */ value))")]
+    public Task NegatesParenthesizedConditionsWithoutLosingComments(string condition, string replacement)
+    {
+        var source = $$"""
+            class Example
+            {
+                bool Run(bool value)
+                {
+                    {|#0:if|} ({{condition}})
+                        return false;
+                    return true;
+                }
+            }
+            """;
+        var fixedSource = $$"""
+            class Example
+            {
+                bool Run(bool value)
+                {
+                    return {{replacement}};
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(SimplifyBooleanReturnAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
 }

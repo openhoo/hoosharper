@@ -21,7 +21,7 @@ public sealed class UseTypePatternAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "Use a declaration pattern when an as cast is immediately followed by a null check.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {

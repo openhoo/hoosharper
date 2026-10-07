@@ -22,7 +22,7 @@ public sealed class UseUsingDeclarationAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "Use a using declaration when a using statement is the final statement in its block.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {
@@ -88,15 +88,11 @@ public sealed class UseUsingDeclarationAnalyzer : DiagnosticAnalyzer
         }
 
         var initializer = usingStatement.Declaration!.Variables[0].Initializer!.Value;
-        var localFunctionNames = new HashSet<string>(System.StringComparer.Ordinal);
-        foreach (var localFunction in body.DescendantNodes().OfType<LocalFunctionStatementSyntax>())
-        {
-            localFunctionNames.Add(localFunction.Identifier.ValueText);
-        }
-
+        // Flattening the body extends its declaration space to the initializer.
+        // A moved local can shadow a member that the resource originally used.
         foreach (var identifier in initializer.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
         {
-            if (localFunctionNames.Contains(identifier.Identifier.ValueText))
+            if (introducedNames.Contains(identifier.Identifier.ValueText))
             {
                 return true;
             }

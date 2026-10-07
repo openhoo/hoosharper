@@ -21,7 +21,7 @@ public sealed class UseNotPatternAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "Replace logical negation of an is-pattern expression with a not pattern.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {

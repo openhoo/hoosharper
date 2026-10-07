@@ -22,7 +22,7 @@ public sealed class SimplifyBooleanReturnAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "Adjacent returns of opposite boolean literals can be replaced with a direct return of the condition.");
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Rule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
     public override void Initialize(AnalysisContext context)
     {
@@ -34,7 +34,8 @@ public sealed class SimplifyBooleanReturnAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
-        if (ifStatement.Else is not null ||
+        if (ifStatement.ContainsDiagnostics ||
+            ifStatement.Else is not null ||
             ifStatement.ContainsDirectives ||
             !TryGetReturnedLiteral(ifStatement.Statement, out var branchValue) ||
             ifStatement.Parent is not BlockSyntax parentBlock)
@@ -52,7 +53,15 @@ public sealed class SimplifyBooleanReturnAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var conditionOperation = context.SemanticModel.GetOperation(ifStatement.Condition, context.CancellationToken);
+        // Roslyn does not associate an operation with every parenthesized syntax
+        // node. Inspect the enclosed expression while retaining its source trivia.
+        ExpressionSyntax condition = ifStatement.Condition;
+        while (condition is ParenthesizedExpressionSyntax parenthesized)
+        {
+            condition = parenthesized.Expression;
+        }
+
+        var conditionOperation = context.SemanticModel.GetOperation(condition, context.CancellationToken);
         if (conditionOperation?.Type?.SpecialType != SpecialType.System_Boolean ||
             ContainsUserDefinedNot(conditionOperation))
         {

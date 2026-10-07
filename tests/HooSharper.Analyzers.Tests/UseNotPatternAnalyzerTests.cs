@@ -329,4 +329,82 @@ public sealed class UseNotPatternAnalyzerTests
             VerifyCS.Diagnostic(UseNotPatternAnalyzer.DiagnosticId).WithLocation(0),
             fixedSource);
     }
+    [Fact]
+    public Task NestedFixDoesNotIntroduceImpossibleValueTypePattern()
+    {
+        const string source = """
+            class Example
+            {
+                bool Run(int value) => {|#0:!|}(!(value is int) is true);
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                bool Run(int value) => !(value is int) is not true;
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(UseNotPatternAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
+
+    [Fact]
+    public Task NestedFixDoesNotIntroducePatternInsideExpressionTree()
+    {
+        const string source = """
+            using System;
+            using System.Linq.Expressions;
+
+            class Example
+            {
+                bool Run() => {|#0:!|}(((Expression<Func<object, bool>>)(value => !(value is string))) is null);
+            }
+            """;
+        const string fixedSource = """
+            using System;
+            using System.Linq.Expressions;
+
+            class Example
+            {
+                bool Run() => ((Expression<Func<object, bool>>)(value => !(value is string))) is not null;
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(UseNotPatternAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
+
+    [Fact]
+    public Task NestedFixDoesNotIntroducePatternInsideQueryableProjection()
+    {
+        const string source = """
+            using System.Linq;
+
+            class Example
+            {
+                bool Run(IQueryable<object> values) =>
+                    {|#0:!|}((from value in values select !(value is string)) is null);
+            }
+            """;
+        const string fixedSource = """
+            using System.Linq;
+
+            class Example
+            {
+                bool Run(IQueryable<object> values) =>
+                    (from value in values select !(value is string)) is not null;
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(UseNotPatternAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
+
 }

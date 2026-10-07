@@ -15,7 +15,7 @@ namespace HooSharper.CodeFixes;
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(RemoveRedundantNullConditionalGuardCodeFixProvider)), Shared]
 public sealed class RemoveRedundantNullConditionalGuardCodeFixProvider : CodeFixProvider
 {
-    public override ImmutableArray<string> FixableDiagnosticIds => [RemoveRedundantNullConditionalGuardAnalyzer.DiagnosticId];
+    public override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(RemoveRedundantNullConditionalGuardAnalyzer.DiagnosticId);
 
     public override FixAllProvider GetFixAllProvider() => WellKnownFixAllProviders.BatchFixer;
 

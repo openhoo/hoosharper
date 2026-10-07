@@ -713,4 +713,119 @@ public sealed class PreferEarlyReturnAnalyzerTests
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
     }
 
+
+    [Fact]
+    public Task DoesNotHoistDeclarationsOverExistingMemberUses()
+    {
+        const string source = """
+            class Example
+            {
+                int value = 1;
+                void Run(bool ready)
+                {
+                    System.Console.WriteLine(value);
+                    if (ready)
+                    {
+                        int value = 2;
+                        System.Console.WriteLine(value);
+                    }
+                }
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+
+    [Fact]
+    public Task PreservesCommentsOnIfAndParenthesisTokens()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool ready)
+                {
+                    {|#0:if|} /* decision */ (ready) /* body */
+                    {
+                        System.Console.WriteLine();
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool ready)
+                {
+                    if /* decision */ (!ready) /* body */
+                        return;
+                    System.Console.WriteLine();
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(PreferEarlyReturnAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+
+    [Fact]
+    public Task DoesNotHoistLocalOverEarlierLambdaMemberReference()
+    {
+        const string source = """
+            class Example
+            {
+                int value = 42;
+                void Run(bool ready)
+                {
+                    System.Action log = () => System.Console.WriteLine(value);
+                    log();
+                    if (ready)
+                    {
+                        int value = 1;
+                        System.Console.WriteLine(value);
+                    }
+                }
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+
+    [Fact]
+    public Task HoistsLocalAndCapturedLocalFunctionWithoutChangingExistingBindings()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool ready)
+                {
+                    int stamp = 0;
+                    System.Console.WriteLine(stamp);
+                    {|#0:if|} (ready)
+                    {
+                        int count = 1;
+                        void Print() { System.Console.WriteLine(count); }
+                        Print();
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool ready)
+                {
+                    int stamp = 0;
+                    System.Console.WriteLine(stamp);
+                    if (!ready)
+                        return;
+                    int count = 1;
+                    void Print() { System.Console.WriteLine(count); }
+                    Print();
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(PreferEarlyReturnAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
 }
