@@ -545,4 +545,40 @@ public sealed class UseNullCoalescingExpressionAnalyzerTests
 
         return test.RunAsync(TestContext.Current.CancellationToken);
     }
+    [Fact]
+    public Task PreservesBuiltInReferenceEqualityForTypesWithImplicitConversions()
+    {
+        const string source = """
+            #nullable enable
+            class Wrapper
+            {
+                public static implicit operator string?(Wrapper? value) => null;
+                public int Length => 1;
+                public void Call() { }
+            }
+            class Example
+            {
+                Wrapper? M(Wrapper? value, Wrapper fallback) => value == null {|#0:?|} fallback : value;
+            }
+            """;
+        const string fixedSource = """
+            #nullable enable
+            class Wrapper
+            {
+                public static implicit operator string?(Wrapper? value) => null;
+                public int Length => 1;
+                public void Call() { }
+            }
+            class Example
+            {
+                Wrapper? M(Wrapper? value, Wrapper fallback) => value ?? fallback;
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(UseNullCoalescingExpressionAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
+
 }

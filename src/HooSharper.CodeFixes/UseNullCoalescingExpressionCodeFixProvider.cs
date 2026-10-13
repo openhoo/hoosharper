@@ -45,6 +45,13 @@ public sealed class UseNullCoalescingExpressionCodeFixProvider : CodeFixProvider
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+        if (semanticModel is null ||
+            !HooSharper.Internal.NullComparisonSafety.IsSafeNullCheck(
+                conditional.Condition, semanticModel, cancellationToken))
+        {
+            return document;
+        }
         if (root is null || !TryGetParts(conditional, out var target, out var fallback))
         {
             return document;

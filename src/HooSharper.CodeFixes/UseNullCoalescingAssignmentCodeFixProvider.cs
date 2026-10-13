@@ -27,7 +27,10 @@ public sealed class UseNullCoalescingAssignmentCodeFixProvider : CodeFixProvider
         var ifStatement = root?.FindToken(diagnostic.Location.SourceSpan.Start).Parent?
             .AncestorsAndSelf().OfType<IfStatementSyntax>().FirstOrDefault();
 
-        if (ifStatement is null)
+        var semanticModel = await context.Document.GetSemanticModelAsync(context.CancellationToken).ConfigureAwait(false);
+        if (ifStatement is null || semanticModel is null ||
+            !UseNullCoalescingAssignmentAnalyzer.TryGetCandidate(
+                ifStatement, semanticModel, context.CancellationToken, out _))
         {
             return;
         }
@@ -46,6 +49,13 @@ public sealed class UseNullCoalescingAssignmentCodeFixProvider : CodeFixProvider
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+        if (semanticModel is null ||
+            !UseNullCoalescingAssignmentAnalyzer.TryGetCandidate(
+                ifStatement, semanticModel, cancellationToken, out _))
+        {
+            return document;
+        }
         if (root is null ||
             ifStatement.Statement is not BlockSyntax { Statements.Count: 1 } block ||
             block.Statements[0] is not ExpressionStatementSyntax

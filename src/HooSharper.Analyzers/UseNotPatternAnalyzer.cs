@@ -136,9 +136,14 @@ public sealed class UseNotPatternAnalyzer : DiagnosticAnalyzer
         TypeSyntax? patternType;
         switch (expression)
         {
-            case IsPatternExpressionSyntax isPattern when !ContainsDesignation(isPattern.Pattern):
+            case IsPatternExpressionSyntax isPattern when IsSupportedPattern(isPattern.Pattern):
                 target = isPattern.Expression;
-                patternType = isPattern.Pattern is TypePatternSyntax typePattern ? typePattern.Type : null;
+                patternType = isPattern.Pattern switch
+                {
+                    TypePatternSyntax typePattern => typePattern.Type,
+                    DeclarationPatternSyntax declarationPattern => declarationPattern.Type,
+                    _ => null,
+                };
                 break;
             case BinaryExpressionSyntax
             {
@@ -160,11 +165,35 @@ public sealed class UseNotPatternAnalyzer : DiagnosticAnalyzer
 
         var targetType = semanticModel.GetTypeInfo(target, cancellationToken).Type;
         var matchedType = semanticModel.GetTypeInfo(patternType, cancellationToken).Type;
-        return targetType is null ||
-               matchedType is null ||
-               !targetType.IsValueType ||
-               targetType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T ||
-               !SymbolEqualityComparer.Default.Equals(targetType, matchedType);
+        if (targetType is null || matchedType is null ||
+            targetType.TypeKind == TypeKind.Error || matchedType.TypeKind == TypeKind.Error)
+        {
+            return false;
+        }
+
+        var nullableTarget = targetType is INamedTypeSymbol
+        {
+            OriginalDefinition.SpecialType: SpecialType.System_Nullable_T,
+        };
+        var effectiveTarget = nullableTarget
+            ? ((INamedTypeSymbol)targetType).TypeArguments[0]
+            : targetType;
+        if (effectiveTarget.TypeKind == TypeKind.Dynamic)
+        {
+            effectiveTarget = semanticModel.Compilation.GetSpecialType(SpecialType.System_Object);
+        }
+        var conversion = semanticModel.Compilation.ClassifyConversion(effectiveTarget, matchedType);
+        // Negating an always-matching value-type test creates a prohibited pattern.
+        if (!nullableTarget && targetType.IsValueType &&
+            (conversion.IsIdentity || conversion.IsBoxing && conversion.IsImplicit))
+        {
+            return false;
+        }
+
+        // Legacy is-type expressions allow impossible tests as warnings; not patterns
+        // require compatible types and turn these expressions into compiler errors.
+        return conversion.IsIdentity || conversion.IsReference || conversion.IsBoxing || conversion.IsUnboxing ||
+            effectiveTarget.TypeKind == TypeKind.TypeParameter || matchedType.TypeKind == TypeKind.TypeParameter;
     }
 
     internal static bool ContainsDesignation(PatternSyntax pattern)
@@ -179,4 +208,10 @@ public sealed class UseNotPatternAnalyzer : DiagnosticAnalyzer
 
         return false;
     }
+
+    private static bool IsSupportedPattern(PatternSyntax pattern) =>
+        pattern is DeclarationPatternSyntax
+        {
+            Designation: SingleVariableDesignationSyntax { Identifier.IsMissing: false } or DiscardDesignationSyntax,
+        } || !ContainsDesignation(pattern);
 }

@@ -143,7 +143,7 @@ public sealed class UseStringContainsAnalyzer : DiagnosticAnalyzer
         }
 
         if (parameters.Length == 2 &&
-            (parameters[0].Type.SpecialType != SpecialType.System_String ||
+            (parameters[0].Type.SpecialType is not SpecialType.System_String and not SpecialType.System_Char ||
              parameters[1].Type.ToDisplayString() != "System.StringComparison"))
         {
             return false;

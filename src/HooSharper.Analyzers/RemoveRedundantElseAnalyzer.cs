@@ -1,4 +1,3 @@
-using System.Linq;
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -33,54 +32,14 @@ public sealed class RemoveRedundantElseAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
-        var elseClause = ifStatement.Else;
-        if (ifStatement.ContainsDiagnostics || elseClause is null || elseClause.Statement is IfStatementSyntax || ifStatement.Parent is ElseClauseSyntax ||
-            HasDirective(elseClause) ||
-            !DefinitelyTerminates(ifStatement.Statement, context.SemanticModel))
+        if (!HooSharper.Internal.ControlFlowScopeSafety.CanRemoveElse(
+                ifStatement, context.SemanticModel, context.CancellationToken))
         {
             return;
         }
 
+        var elseClause = ifStatement.Else!;
         context.ReportDiagnostic(Diagnostic.Create(Rule, elseClause.ElseKeyword.GetLocation()));
     }
 
-    private static bool DefinitelyTerminates(StatementSyntax statement, SemanticModel semanticModel)
-    {
-        if (statement is ReturnStatementSyntax or ThrowStatementSyntax or ContinueStatementSyntax or BreakStatementSyntax)
-        {
-            return true;
-        }
-
-        if (statement is not BlockSyntax block)
-        {
-            return false;
-        }
-        if (block.Statements.Count == 0)
-        {
-            return false;
-        }
-
-        var lastStatement = block.Statements[block.Statements.Count - 1];
-        if (lastStatement is ReturnStatementSyntax or ThrowStatementSyntax or ContinueStatementSyntax or BreakStatementSyntax)
-        {
-            return true;
-        }
-
-
-        for (var index = block.Statements.Count - 2; index >= 0; index--)
-        {
-            var candidate = block.Statements[index];
-            var controlFlow = semanticModel.AnalyzeControlFlow(candidate);
-            if (controlFlow?.StartPointIsReachable == true)
-            {
-                return candidate is ReturnStatementSyntax or ThrowStatementSyntax or
-                    ContinueStatementSyntax or BreakStatementSyntax;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool HasDirective(SyntaxNode node) =>
-        node.DescendantTrivia(descendIntoTrivia: true).Any(trivia => trivia.IsDirective);
 }

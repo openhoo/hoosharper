@@ -5,8 +5,12 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/HooSharper.Analyzers.Tests/HooSharper.Analyzers.Tests.csproj" />
+    <Project Path="tests/smoke/RuleMatrix/RuleMatrix.csproj" />
   </Folder>
   <Folder Name="/benchmarks/">
     <Project Path="benchmarks/HooSharper.Performance/HooSharper.Performance.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/HooSharper.SmokeTests/HooSharper.SmokeTests.csproj" />
   </Folder>
 </Solution>

@@ -45,7 +45,9 @@ public sealed class PreferLoopContinueAnalyzer : DiagnosticAnalyzer
         if (ifStatement.Parent is not BlockSyntax loopBody ||
             loopBody.Statements.LastOrDefault() != ifStatement ||
             !IsLoopBody(loopBody) ||
-            HasBindingCollision(ifStatement, loopBody, block))
+            HasBindingCollision(ifStatement, loopBody, block) ||
+            HooSharper.Internal.ControlFlowScopeSafety.HoistingBodyCrossesUsingDeclaration(
+                block, loopBody, context.SemanticModel, context.CancellationToken))
         {
             return;
         }

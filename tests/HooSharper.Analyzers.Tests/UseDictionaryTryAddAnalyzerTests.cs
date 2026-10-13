@@ -1,3 +1,6 @@
+using HooSharper.CodeFixes;
+using Microsoft.CodeAnalysis.CSharp.Testing;
+using Microsoft.CodeAnalysis.Testing;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
     HooSharper.Analyzers.UseDictionaryTryAddAnalyzer,
     HooSharper.CodeFixes.UseDictionaryTryAddCodeFixProvider>;
@@ -6,6 +9,135 @@ namespace HooSharper.Analyzers.Tests;
 
 public sealed class UseDictionaryTryAddAnalyzerTests
 {
+    [Theory]
+    [InlineData("dictionary.Add(value: 1, key: );")]
+    [InlineData("dictionary.Add(value: 1, unknown: 2);")]
+    public Task IgnoresIncompleteOrInvalidNamedArguments(string addStatement)
+    {
+        var source = $$"""
+            using System.Collections.Generic;
+            class Example
+            {
+                void Run()
+                {
+                    var dictionary = new Dictionary<int, int>();
+                    if (!dictionary.ContainsKey(1))
+                    {
+                        {{addStatement}}
+                    }
+                }
+            }
+            """;
+        var test = new CSharpCodeFixTest<UseDictionaryTryAddAnalyzer, UseDictionaryTryAddCodeFixProvider, DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+            CompilerDiagnostics = CompilerDiagnostics.None,
+        };
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public Task IgnoresReorderedNamedArgumentsWhenTheActualKeyDiffers()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            class Example
+            {
+                void Run()
+                {
+                    var dictionary = new Dictionary<int, int>();
+                    if (!dictionary.ContainsKey(1))
+                    {
+                        dictionary.Add(value: 1, key: 2);
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task FixesReorderedNamedArgumentsWithTheSameActualKey()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            class Example
+            {
+                void Run(int key, int value)
+                {
+                    var dictionary = new Dictionary<int, int>();
+                    if (!dictionary.{|#0:ContainsKey|}(key))
+                    {
+                        dictionary.Add(value: value, key: key);
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+            class Example
+            {
+                void Run(int key, int value)
+                {
+                    var dictionary = new Dictionary<int, int>();
+                    dictionary.TryAdd(value: value, key: key);
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(UseDictionaryTryAddAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+    [Fact]
+    public Task FixAllHandlesReorderedNamedArgumentsInBothBodyForms()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            class Example
+            {
+                void Run(int first, int second, int value)
+                {
+                    var dictionary = new Dictionary<int, int>();
+                    if (!dictionary.{|#0:ContainsKey|}(first))
+                    {
+                        dictionary.Add(value: value, key: first);
+                    }
+                    if (!dictionary.{|#1:ContainsKey|}(second))
+                    {
+                        dictionary.Add(value: value, key: second);
+                        Consume();
+                    }
+                }
+                void Consume() { }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+            class Example
+            {
+                void Run(int first, int second, int value)
+                {
+                    var dictionary = new Dictionary<int, int>();
+                    dictionary.TryAdd(value: value, key: first);
+                    if (dictionary.TryAdd(value: value, key: second))
+                    {
+                        Consume();
+                    }
+                }
+                void Consume() { }
+            }
+            """;
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(UseDictionaryTryAddAnalyzer.DiagnosticId).WithLocation(0),
+            VerifyCS.Diagnostic(UseDictionaryTryAddAnalyzer.DiagnosticId).WithLocation(1),
+        };
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
     [Fact]
     public Task ReplacesSoleAddStatement()
     {

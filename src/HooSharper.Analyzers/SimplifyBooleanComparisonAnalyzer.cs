@@ -55,10 +55,14 @@ public sealed class SimplifyBooleanComparisonAnalyzer : DiagnosticAnalyzer
 
     private static bool IsSafeComparison(IBinaryOperation operation) =>
         operation.OperatorMethod is null &&
-        operation.LeftOperand.Type?.SpecialType == SpecialType.System_Boolean &&
-        operation.RightOperand.Type?.SpecialType == SpecialType.System_Boolean &&
+        IsBooleanOperand(operation.LeftOperand) &&
+        IsBooleanOperand(operation.RightOperand) &&
         operation.Type?.SpecialType == SpecialType.System_Boolean &&
         !ContainsUserDefinedNot(operation);
+
+    private static bool IsBooleanOperand(IOperation operation) =>
+        operation.Type?.SpecialType == SpecialType.System_Boolean &&
+        operation is not IConversionOperation { IsImplicit: true, OperatorMethod: not null };
 
     private static bool HasEligibleAncestor(
         BinaryExpressionSyntax comparison,

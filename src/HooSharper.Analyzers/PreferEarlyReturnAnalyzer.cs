@@ -47,7 +47,9 @@ public sealed class PreferEarlyReturnAnalyzer : DiagnosticAnalyzer
         if (ifStatement.Parent is not BlockSyntax parentBlock || parentBlock.Statements.LastOrDefault() != ifStatement ||
             parentBlock.Parent is not MethodDeclarationSyntax method ||
             method.ReturnType is not PredefinedTypeSyntax { Keyword.RawKind: (int)SyntaxKind.VoidKeyword } ||
-            HasScopeCollision(ifStatement, parentBlock, block))
+            HasScopeCollision(ifStatement, parentBlock, block) ||
+            HooSharper.Internal.ControlFlowScopeSafety.HoistingBodyCrossesUsingDeclaration(
+                block, parentBlock, context.SemanticModel, context.CancellationToken))
         {
             return;
         }
@@ -90,6 +92,11 @@ public sealed class PreferEarlyReturnAnalyzer : DiagnosticAnalyzer
 
             foreach (var node in statement.DescendantNodes(ShouldDescendInto))
             {
+                if (node is LabeledStatementSyntax label && IsDirectlyContainedBy(label, body))
+                {
+                    movedLabels.Add(label.Identifier.ValueText);
+                }
+
                 if (node is not SingleVariableDesignationSyntax designation ||
                     !IsDirectlyContainedBy(designation, body))
                 {

@@ -79,7 +79,8 @@ public sealed class UseHashSetAddResultCodeFixProvider : CodeFixProvider
         }
         else
         {
-            var conditionComments = CommentLines(ifStatement.Condition.DescendantTrivia(descendIntoTrivia: true));
+            var conditionComments = CommentLines(ifStatement.Condition.DescendantTrivia(descendIntoTrivia: true)
+                .Where(trivia => ifStatement.Condition.Span.Contains(trivia.Span)));
             var updatedCondition = addInvocation
                 .WithLeadingTrivia(ifStatement.Condition.GetLeadingTrivia().AddRange(conditionComments))
                 .WithTrailingTrivia(ifStatement.Condition.GetTrailingTrivia());

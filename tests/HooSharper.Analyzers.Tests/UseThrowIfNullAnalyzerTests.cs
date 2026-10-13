@@ -630,4 +630,76 @@ public sealed class UseThrowIfNullAnalyzerTests
         return test.RunAsync(TestContext.Current.CancellationToken);
     }
 
+    [Fact]
+    public Task DoesNotRemoveUserDefinedConversionsFromNullComparison()
+    {
+        const string source = """
+            using System;
+
+            readonly struct Argument
+            {
+                public static implicit operator string?(Argument value) => null;
+            }
+
+            readonly struct Number
+            {
+                public static implicit operator int?(Number value) => null;
+            }
+
+            class Example
+            {
+                void Reference(Argument argument)
+                {
+                    if (argument == null)
+                        throw new ArgumentNullException(nameof(argument));
+                }
+
+                void Nullable(Number number)
+                {
+                    if (number == null)
+                        throw new ArgumentNullException(nameof(number));
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task DoesNotBoxTypeParametersThatAllowRefStructs()
+    {
+        const string source = """
+            using System;
+
+            class Example
+            {
+                void Run<T>(T argument) where T : allows ref struct
+                {
+                    if (argument is null)
+                        throw new ArgumentNullException(nameof(argument));
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task DoesNotIntroduceDynamicInvocationForNullPatterns()
+    {
+        const string source = """
+            using System;
+            class Example
+            {
+                void Run(dynamic value)
+                {
+                    if (value is null)
+                        throw new ArgumentNullException(nameof(value));
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
 }

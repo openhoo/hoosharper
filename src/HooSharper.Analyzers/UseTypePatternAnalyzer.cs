@@ -70,10 +70,7 @@ public sealed class UseTypePatternAnalyzer : DiagnosticAnalyzer
         var nullCheck = WalkDownParentheses(ifStatement.Condition);
         if (checkedIdentifier is null ||
             (nullCheck is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.NotEqualsExpression } &&
-             context.SemanticModel.GetOperation(nullCheck, context.CancellationToken) is not IBinaryOperation
-             {
-                 OperatorMethod: null,
-             }))
+             !HooSharper.Internal.NullComparisonSafety.IsSafeBinary(context.SemanticModel.GetOperation(nullCheck, context.CancellationToken))))
         {
             return;
         }
@@ -81,6 +78,11 @@ public sealed class UseTypePatternAnalyzer : DiagnosticAnalyzer
         var local = context.SemanticModel.GetDeclaredSymbol(declarator, context.CancellationToken) as ILocalSymbol;
         var checkedSymbol = context.SemanticModel.GetSymbolInfo(checkedIdentifier, context.CancellationToken).Symbol;
         if (local is null || !SymbolEqualityComparer.Default.Equals(local, checkedSymbol))
+        {
+            return;
+        }
+
+        if (!PreservesNullableDeclaration(local, ifStatement.Statement, context.SemanticModel))
         {
             return;
         }
@@ -176,6 +178,36 @@ public sealed class UseTypePatternAnalyzer : DiagnosticAnalyzer
     private static bool SupportsTypePatterns(LanguageVersion languageVersion) =>
         languageVersion == LanguageVersion.Default || languageVersion >= LanguageVersion.CSharp7;
 
+
+    private static bool PreservesNullableDeclaration(
+        ILocalSymbol local,
+        StatementSyntax body,
+        SemanticModel semanticModel)
+    {
+        if (local.Type.NullableAnnotation != NullableAnnotation.Annotated)
+        {
+            return true;
+        }
+
+        // The as-inferred local can accept null, while a declaration-pattern
+        // local has a non-nullable declaration type. Writes (including ref/out)
+        // would therefore introduce nullable warnings after the rewrite.
+        var dataFlow = semanticModel.AnalyzeDataFlow(body);
+        if (dataFlow is not { Succeeded: true })
+        {
+            return false;
+        }
+
+        foreach (var written in dataFlow.WrittenInside)
+        {
+            if (SymbolEqualityComparer.Default.Equals(local, written))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     private static bool IsNullableValueType(ITypeSymbol type) =>
         type is INamedTypeSymbol namedType &&

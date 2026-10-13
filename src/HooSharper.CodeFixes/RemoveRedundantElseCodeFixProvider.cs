@@ -28,7 +28,9 @@ public sealed class RemoveRedundantElseCodeFixProvider : CodeFixProvider
         var ifStatement = root?.FindToken(diagnostic.Location.SourceSpan.Start).Parent?
             .AncestorsAndSelf().OfType<IfStatementSyntax>().FirstOrDefault();
 
-        if (ifStatement?.Else is null)
+        var semanticModel = await context.Document.GetSemanticModelAsync(context.CancellationToken).ConfigureAwait(false);
+        if (ifStatement is null || semanticModel is null ||
+            !HooSharper.Internal.ControlFlowScopeSafety.CanRemoveElse(ifStatement, semanticModel, context.CancellationToken))
         {
             return;
         }
@@ -47,8 +49,9 @@ public sealed class RemoveRedundantElseCodeFixProvider : CodeFixProvider
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-        if (root is null || ifStatement.Else is not { } elseClause ||
-            HasDirective(elseClause))
+        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+        if (root is null || semanticModel is null || ifStatement.Else is not { } elseClause ||
+            !HooSharper.Internal.ControlFlowScopeSafety.CanRemoveElse(ifStatement, semanticModel, cancellationToken))
         {
             return document;
         }
@@ -141,7 +144,7 @@ public sealed class RemoveRedundantElseCodeFixProvider : CodeFixProvider
         foreach (var node in block.DescendantNodes())
         {
             if (node is LocalDeclarationStatementSyntax or LocalFunctionStatementSyntax or
-                DeclarationExpressionSyntax or SingleVariableDesignationSyntax)
+                DeclarationExpressionSyntax or SingleVariableDesignationSyntax or LabeledStatementSyntax)
             {
                 return true;
             }
@@ -175,6 +178,4 @@ public sealed class RemoveRedundantElseCodeFixProvider : CodeFixProvider
         return SyntaxFactory.TriviaList(result);
     }
 
-    private static bool HasDirective(SyntaxNode node) =>
-        node.DescendantTrivia(descendIntoTrivia: true).Any(trivia => trivia.IsDirective);
 }

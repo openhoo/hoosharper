@@ -1,4 +1,6 @@
 using HooSharper.CodeFixes;
+using Microsoft.CodeAnalysis.CSharp.Testing;
+using Microsoft.CodeAnalysis.Testing;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
     HooSharper.Analyzers.UseStringContainsAnalyzer,
     HooSharper.CodeFixes.UseStringContainsCodeFixProvider>;
@@ -7,6 +9,55 @@ namespace HooSharper.Analyzers.Tests;
 
 public sealed class UseStringContainsAnalyzerTests
 {
+    [Fact]
+    public Task IgnoresPresenceTestsWhenContainsOverloadsAreUnavailable()
+    {
+        const string source = """
+            using System;
+            class Example
+            {
+                bool Run(string value) =>
+                    value.IndexOf('x') >= 0 ||
+                    value.IndexOf("x", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            """;
+        var test = new CSharpCodeFixTest<UseStringContainsAnalyzer, UseStringContainsCodeFixProvider, DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.NetStandard.NetStandard20,
+            TestCode = source,
+        };
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public Task FixesCharIndexOfWithExplicitComparisonAndReorderedNamedArguments()
+    {
+        const string source = """
+            using System;
+            class Example
+            {
+                bool Run(string value, char search) =>
+                    value.{|#0:IndexOf|}(search, StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    value.{|#1:IndexOf|}(comparisonType: StringComparison.CurrentCulture, value: search) == -1;
+            }
+            """;
+        const string fixedSource = """
+            using System;
+            class Example
+            {
+                bool Run(string value, char search) =>
+                    value.Contains(search, StringComparison.OrdinalIgnoreCase) &&
+                    !value.Contains(comparisonType: StringComparison.CurrentCulture, value: search);
+            }
+            """;
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(UseStringContainsAnalyzer.DiagnosticId).WithLocation(0),
+            VerifyCS.Diagnostic(UseStringContainsAnalyzer.DiagnosticId).WithLocation(1),
+        };
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
     [Fact]
     public Task FixesPositiveNegativeReversedAndComparisonOverload()
     {

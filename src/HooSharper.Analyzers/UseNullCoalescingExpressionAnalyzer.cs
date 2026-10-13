@@ -117,7 +117,7 @@ public sealed class UseNullCoalescingExpressionAnalyzer : DiagnosticAnalyzer
 
         if (condition is BinaryExpressionSyntax binary &&
             (binary.IsKind(SyntaxKind.EqualsExpression) || binary.IsKind(SyntaxKind.NotEqualsExpression)) &&
-            semanticModel.GetOperation(binary, cancellationToken) is IBinaryOperation { OperatorMethod: null })
+            HooSharper.Internal.NullComparisonSafety.IsSafeBinary(semanticModel.GetOperation(binary, cancellationToken)))
         {
             if (binary.Right.IsKind(SyntaxKind.NullLiteralExpression))
             {

@@ -13,6 +13,153 @@ namespace HooSharper.Analyzers.Tests;
 public sealed class UseTryGetValueAnalyzerTests
 {
     [Fact]
+    public Task IgnoresConstructorReassignmentOfAContainingDictionaryReceiver()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            class Holder
+            {
+                public readonly Dictionary<int, int> Dictionary = new Dictionary<int, int>();
+            }
+            class Example
+            {
+                private readonly Holder holder = new Holder();
+                private readonly int result;
+                Example(Holder other)
+                {
+                    if (holder.Dictionary.ContainsKey(1))
+                    {
+                        holder = other;
+                        result = holder.Dictionary[1];
+                    }
+                }
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task IgnoresConstructorReassignmentOfAContainingKeyReceiver()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            class Holder
+            {
+                public readonly int Key = 1;
+            }
+            class Example
+            {
+                private readonly Dictionary<int, int> dictionary = new Dictionary<int, int>();
+                private readonly Holder holder = new Holder();
+                private readonly int result;
+                Example(Holder other)
+                {
+                    if (dictionary.ContainsKey(holder.Key))
+                    {
+                        holder = other;
+                        result = dictionary[holder.Key];
+                    }
+                }
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task IgnoresSameSpelledKeyBoundToADifferentSymbolInsideTheBody()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            class Example
+            {
+                private readonly Dictionary<int, int> dictionary = new Dictionary<int, int>();
+                private const int Key = 1;
+                int Run()
+                {
+                    if (dictionary.ContainsKey(Key))
+                    {
+                        const int Key = 2;
+                        return dictionary[Key];
+                    }
+                    return 0;
+                }
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task IgnoresSameSpelledDictionaryBoundToADifferentSymbolInsideTheBody()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            class Example
+            {
+                private readonly Dictionary<int, int> dictionary = new Dictionary<int, int>();
+                private readonly Dictionary<int, int> other = new Dictionary<int, int>();
+                int Run()
+                {
+                    if (dictionary.ContainsKey(1))
+                    {
+                        var dictionary = other;
+                        return dictionary[1];
+                    }
+                    return 0;
+                }
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task FixesNamedKeyArgumentInCSharp7()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            class Example
+            {
+                private readonly Dictionary<int, int> dictionary = new Dictionary<int, int>();
+                int Run()
+                {
+                    if (dictionary.{|#0:ContainsKey|}(key: 1))
+                    {
+                        return dictionary[1];
+                    }
+                    return 0;
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+            class Example
+            {
+                private readonly Dictionary<int, int> dictionary = new Dictionary<int, int>();
+                int Run()
+                {
+                    if (dictionary.TryGetValue(key: 1, value: out var value))
+                    {
+                        return value;
+                    }
+                    return 0;
+                }
+            }
+            """;
+
+        var test = new CSharpCodeFixTest<UseTryGetValueAnalyzer, UseTryGetValueCodeFixProvider, DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+            FixedCode = fixedSource,
+        };
+        test.ExpectedDiagnostics.Add(VerifyCS.Diagnostic(UseTryGetValueAnalyzer.DiagnosticId).WithLocation(0));
+        test.SolutionTransforms.Add((solution, projectId) =>
+            solution.WithProjectParseOptions(projectId,
+                ((CSharpParseOptions)solution.GetProject(projectId)!.ParseOptions!)
+                    .WithLanguageVersion(LanguageVersion.CSharp7)));
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public Task FixesDictionaryAndRepeatedAccesses()
     {
         const string source = """

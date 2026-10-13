@@ -82,10 +82,7 @@ public sealed class UseDictionaryTryAddAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var containsKey = containsInvocation.ArgumentList.Arguments[0].Expression;
-        var addKey = addInvocation.ArgumentList.Arguments[0].Expression;
-        if (!SyntaxFactory.AreEquivalent(containsMember.Expression, addMember.Expression) ||
-            !SyntaxFactory.AreEquivalent(containsKey, addKey))
+        if (!SyntaxFactory.AreEquivalent(containsMember.Expression, addMember.Expression))
         {
             return;
         }
@@ -98,9 +95,21 @@ public sealed class UseDictionaryTryAddAnalyzer : DiagnosticAnalyzer
             return;
         }
 
+        // Named arguments can appear in a different order from the method's
+        // parameters. Match the actual key, and validate the actual value that
+        // TryAdd will evaluate even when the key is already present.
+        var addKeyArgument = addOperation!.Arguments.FirstOrDefault(argument => argument.Parameter?.Ordinal == 0);
+        var addValueArgument = addOperation.Arguments.FirstOrDefault(argument => argument.Parameter?.Ordinal == 1);
+        if (addKeyArgument?.Syntax is not ArgumentSyntax addKeySyntax ||
+            addValueArgument is null ||
+            !SyntaxFactory.AreEquivalent(containsInvocation.ArgumentList.Arguments[0].Expression, addKeySyntax.Expression))
+        {
+            return;
+        }
+
         var receiverOperation = containsOperation!.Instance;
         var keyOperation = containsOperation.Arguments[0].Value;
-        var valueOperation = addOperation!.Arguments[1].Value;
+        var valueOperation = addValueArgument.Value;
         if (!HasProvablyPureComparer(
                 receiverOperation,
                 ifStatement,

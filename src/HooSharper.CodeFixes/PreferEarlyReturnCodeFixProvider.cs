@@ -29,7 +29,9 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
         var ifStatement = root?.FindToken(diagnostic.Location.SourceSpan.Start).Parent?
             .AncestorsAndSelf().OfType<IfStatementSyntax>().FirstOrDefault();
 
-        if (ifStatement is null)
+        if (ifStatement?.Statement is not BlockSyntax body ||
+            ifStatement.Parent is not BlockSyntax parentBlock ||
+            HasScopeCollision(ifStatement, parentBlock, body))
         {
             return;
         }
@@ -56,7 +58,9 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
             ifStatement.Statement is not BlockSyntax body ||
             ifStatement.Parent is not BlockSyntax parentBlock ||
             ifStatement.ContainsDirectives ||
-            HasScopeCollision(ifStatement, parentBlock, body))
+            HasScopeCollision(ifStatement, parentBlock, body) ||
+            HooSharper.Internal.ControlFlowScopeSafety.HoistingBodyCrossesUsingDeclaration(
+                body, parentBlock, semanticModel, cancellationToken))
         {
             return document;
         }
@@ -94,6 +98,7 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
         BlockSyntax body)
     {
         var movedNames = new HashSet<string>(StringComparer.Ordinal);
+        var movedLabels = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var statement in body.Statements)
         {
@@ -109,10 +114,18 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
                 case LocalFunctionStatementSyntax localFunction:
                     movedNames.Add(localFunction.Identifier.ValueText);
                     break;
+                case LabeledStatementSyntax labeledStatement:
+                    movedLabels.Add(labeledStatement.Identifier.ValueText);
+                    break;
             }
 
             foreach (var node in statement.DescendantNodes(ShouldDescendInto))
             {
+                if (node is LabeledStatementSyntax label && IsDirectlyContainedBy(label, body))
+                {
+                    movedLabels.Add(label.Identifier.ValueText);
+                }
+
                 if (node is SingleVariableDesignationSyntax designation && IsDirectlyContainedBy(designation, body))
                 {
                     movedNames.Add(designation.Identifier.ValueText);
@@ -120,7 +133,7 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
             }
         }
 
-        if (movedNames.Count == 0)
+        if (movedNames.Count == 0 && movedLabels.Count == 0)
         {
             return false;
         }
@@ -161,6 +174,11 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
                 if (node is IdentifierNameSyntax identifier && movedNames.Contains(identifier.Identifier.ValueText) ||
                     node is GenericNameSyntax generic && movedNames.Contains(generic.Identifier.ValueText) ||
                     name is not null && movedNames.Contains(name))
+                {
+                    return true;
+                }
+
+                if (node is LabeledStatementSyntax label && movedLabels.Contains(label.Identifier.ValueText))
                 {
                     return true;
                 }
@@ -226,6 +244,14 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
     {
         var originalCondition = condition;
         condition = WalkDownParentheses(condition);
+        if (condition != originalCondition &&
+            HasSignificantTrivia(originalCondition.DescendantTrivia(descendIntoTrivia: true)))
+        {
+            // Removing these parentheses would also remove comments attached
+            // to their interior operand edges.
+            return ParenthesizedNegation(originalCondition);
+        }
+
         return condition switch
         {
             PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression } logicalNot
@@ -282,5 +308,7 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
     private static PrefixUnaryExpressionSyntax ParenthesizedNegation(ExpressionSyntax condition) =>
         SyntaxFactory.PrefixUnaryExpression(
             SyntaxKind.LogicalNotExpression,
-            SyntaxFactory.ParenthesizedExpression(condition));
+            // The caller restores the original condition's edge trivia on the
+            // complete negation. Keeping it here as well duplicates comments.
+            SyntaxFactory.ParenthesizedExpression(condition.WithoutTrivia()));
 }

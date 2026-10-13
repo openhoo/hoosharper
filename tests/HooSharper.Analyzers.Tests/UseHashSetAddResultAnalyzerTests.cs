@@ -8,6 +8,45 @@ namespace HooSharper.Analyzers.Tests;
 public sealed class UseHashSetAddResultAnalyzerTests
 {
     [Fact]
+    public Task PreservesConditionBoundaryCommentsExactlyOnce()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            class Example
+            {
+                void Run(int value)
+                {
+                    var set = new HashSet<int>();
+                    if (!set.{|#0:Contains|}(value) /* after lookup */)
+                    {
+                        set.Add(value);
+                        Consume();
+                    }
+                }
+                void Consume() { }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+            class Example
+            {
+                void Run(int value)
+                {
+                    var set = new HashSet<int>();
+                    if (set.Add(value) /* after lookup */)
+                    {
+                        Consume();
+                    }
+                }
+                void Consume() { }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(UseHashSetAddResultAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+    [Fact]
     public Task ReplacesSoleAddWithExpressionStatement()
     {
         const string source = """

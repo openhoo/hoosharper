@@ -32,43 +32,52 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
 
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
     {
-        if (context.Node.SyntaxTree.Options is not CSharpParseOptions parseOptions ||
+        if (TryGetCandidate((IfStatementSyntax)context.Node, context.SemanticModel,
+                context.CancellationToken, out var diagnosticLocation))
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, diagnosticLocation));
+        }
+    }
+
+    public static bool TryGetCandidate(
+        IfStatementSyntax ifStatement,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken,
+        out Location diagnosticLocation)
+    {
+        diagnosticLocation = Location.None;
+        if (ifStatement.SyntaxTree.Options is not CSharpParseOptions parseOptions ||
             (parseOptions.LanguageVersion != LanguageVersion.Default &&
              parseOptions.LanguageVersion < LanguageVersion.CSharp8))
         {
-            return;
+            return false;
         }
 
-        var ifStatement = (IfStatementSyntax)context.Node;
         if (ifStatement.Else is not null ||
             ifStatement.Statement is not BlockSyntax { Statements.Count: 1 } block ||
             block.Statements[0] is not ExpressionStatementSyntax
             {
                 Expression: AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.SimpleAssignmentExpression } assignment,
             } ||
+            assignment.ContainsDiagnostics ||
             HasDirective(ifStatement) ||
             HasUnpreservedComment(ifStatement.Condition))
         {
-            return;
+            return false;
         }
 
-        if (!TryGetNullCheckedTarget(ifStatement.Condition, context.SemanticModel, context.CancellationToken,
-                out var checkedTarget, out var diagnosticLocation))
+        if (!TryGetNullCheckedTarget(ifStatement.Condition, semanticModel, cancellationToken,
+                out var checkedTarget, out diagnosticLocation))
         {
-            return;
+            return false;
         }
 
-        if (!TryGetSupportedTargetOperation(checkedTarget, context.SemanticModel, context.CancellationToken,
-                out var checkedOperation) ||
-            !TryGetSupportedTargetOperation(assignment.Left, context.SemanticModel, context.CancellationToken,
-                out var assignedOperation) ||
-            !AreEquivalentReferences(checkedOperation, assignedOperation) ||
-            !SupportsNullCoalescingAssignment(assignedOperation.Type))
-        {
-            return;
-        }
-
-        context.ReportDiagnostic(Diagnostic.Create(Rule, diagnosticLocation));
+        return TryGetSupportedTargetOperation(checkedTarget, semanticModel, cancellationToken,
+                out var checkedOperation) &&
+            TryGetSupportedTargetOperation(assignment.Left, semanticModel, cancellationToken,
+                out var assignedOperation) &&
+            AreEquivalentReferences(checkedOperation, assignedOperation) &&
+            SupportsNullCoalescingAssignment(assignedOperation.Type);
     }
 
     private static bool TryGetNullCheckedTarget(
@@ -79,6 +88,13 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
         out Location diagnosticLocation)
     {
         condition = WalkDownParentheses(condition);
+
+        if (HooSharper.Internal.NullComparisonSafety.TryGetNullableHasValueGuard(
+                condition, semanticModel, cancellationToken, out target))
+        {
+            diagnosticLocation = ((PrefixUnaryExpressionSyntax)condition).OperatorToken.GetLocation();
+            return true;
+        }
 
         if (condition is IsPatternExpressionSyntax
             {
@@ -98,7 +114,7 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
                 Right: LiteralExpressionSyntax nullLiteral,
             } binary &&
             nullLiteral.IsKind(SyntaxKind.NullLiteralExpression) &&
-            semanticModel.GetOperation(binary, cancellationToken) is IBinaryOperation { OperatorMethod: null })
+            HooSharper.Internal.NullComparisonSafety.IsSafeBinary(semanticModel.GetOperation(binary, cancellationToken)))
         {
             target = binaryTarget;
             diagnosticLocation = binary.OperatorToken.GetLocation();

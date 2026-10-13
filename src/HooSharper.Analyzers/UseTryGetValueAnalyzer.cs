@@ -365,14 +365,32 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
+        var dictionaryOperation = semanticModel.GetOperation(dictionary, cancellationToken);
         foreach (var node in statement.DescendantNodes(ShouldDescendInto))
         {
+            if (node is ElementAccessExpressionSyntax { ArgumentList.Arguments.Count: 1 } access &&
+                IsSameExpression(access.Expression, dictionary) &&
+                IsSameExpression(access.ArgumentList.Arguments[0].Expression, key) &&
+                (!LookupOperationsMatch(
+                    semanticModel.GetOperation(access.Expression, cancellationToken),
+                    semanticModel.GetOperation(dictionary, cancellationToken)) ||
+                 !LookupOperationsMatch(
+                    semanticModel.GetOperation(access.ArgumentList.Arguments[0].Expression, cancellationToken),
+                    keyOperation)))
+            {
+                // A local declaration can shadow a field inside the if body.
+                // Its indexer may also use a different comparer, so reject the
+                // entire rewrite instead of treating it as a stable lookup.
+                return true;
+            }
+
             if (node is AssignmentExpressionSyntax assignment &&
                 (assignment.Left is ElementAccessExpressionSyntax ||
                  ContainsMatchingDictionaryIndexer(assignment.Left, dictionary, key) ||
                  IsSameExpression(assignment.Left, dictionary) ||
                  IsSameExpression(assignment.Left, key) ||
-                 WritesKeyLocation(assignment.Left, key, keyOperation, semanticModel, cancellationToken)))
+                 WritesLookupLocation(assignment.Left, key, keyOperation, semanticModel, cancellationToken) ||
+                 WritesLookupLocation(assignment.Left, dictionary, dictionaryOperation, semanticModel, cancellationToken)))
             {
                 return true;
             }
@@ -391,7 +409,8 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
                  IsSameExpression(mutatedOperand, dictionary) ||
                  IsSameExpression(mutatedOperand, key) ||
                  IsDictionaryIndexer(mutatedOperand, dictionary) ||
-                 WritesKeyLocation(mutatedOperand, key, keyOperation, semanticModel, cancellationToken)))
+                 WritesLookupLocation(mutatedOperand, key, keyOperation, semanticModel, cancellationToken) ||
+                 WritesLookupLocation(mutatedOperand, dictionary, dictionaryOperation, semanticModel, cancellationToken)))
             {
                 return true;
             }
@@ -452,7 +471,7 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    private static bool WritesKeyLocation(
+    private static bool WritesLookupLocation(
         ExpressionSyntax target,
         ExpressionSyntax key,
         IOperation? keyOperation,
@@ -474,20 +493,18 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
-        if (target is not MemberAccessExpressionSyntax
-            {
-                Expression: ThisExpressionSyntax,
-                Name: IdentifierNameSyntax memberName,
-            } ||
-            key is not IdentifierNameSyntax keyIdentifier ||
-            keyIdentifier.Identifier.ValueText != memberName.Identifier.ValueText)
+        var targetRoot = Unwrap(semanticModel.GetOperation(target, cancellationToken));
+        for (var reference = Unwrap(keyOperation); reference is not null; reference = GetReceiverInstance(reference))
         {
-            return false;
+            // Readonly fields can still be assigned by their constructor. A
+            // write to any containing receiver changes the eventual lookup.
+            if (ReferenceChainsMatch(targetRoot, reference))
+            {
+                return true;
+            }
         }
 
-        var targetRoot = Unwrap(semanticModel.GetOperation(target, cancellationToken));
-
-        return ReferenceChainsMatch(targetRoot, keyOperation);
+        return false;
     }
 
     private static bool ReferenceChainsMatch(IOperation? left, IOperation? right)
@@ -514,6 +531,29 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
             left = GetReceiverInstance(left);
             right = GetReceiverInstance(right);
         }
+    }
+
+    private static bool LookupOperationsMatch(IOperation? left, IOperation? right)
+    {
+        left = Unwrap(left);
+        right = Unwrap(right);
+        if (left is null || right is null)
+        {
+            return false;
+        }
+
+        if (GetReferencedMember(left) is not null || GetReferencedMember(right) is not null ||
+            left is IInstanceReferenceOperation || right is IInstanceReferenceOperation)
+        {
+            return ReferenceChainsMatch(left, right);
+        }
+
+        return SymbolEqualityComparer.Default.Equals(left.Type, right.Type) &&
+            (left is ILiteralOperation && right is ILiteralOperation &&
+                Equals(left.ConstantValue.Value, right.ConstantValue.Value) ||
+             left is IDefaultValueOperation && right is IDefaultValueOperation ||
+             left is ITypeOfOperation leftTypeOf && right is ITypeOfOperation rightTypeOf &&
+                SymbolEqualityComparer.Default.Equals(leftTypeOf.TypeOperand, rightTypeOf.TypeOperand));
     }
 
     private static ISymbol? GetReferencedMember(IOperation operation) => operation switch

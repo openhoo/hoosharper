@@ -505,4 +505,60 @@ public sealed class UseNullConditionalAccessAnalyzerTests
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
 
+    [Fact]
+    public Task DoesNotBindNullableMembersToUnderlyingStructMembers()
+    {
+        const string source = """
+            struct State
+            {
+                public State Value => default;
+                public State GetValueOrDefault() => default;
+            }
+
+            class Example
+            {
+                State? Property(State? value) => value == null ? null : value.Value;
+                State? Method(State? value) => value == null ? null : value.GetValueOrDefault();
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task PreservesBuiltInReferenceEqualityForTypesWithImplicitConversions()
+    {
+        const string source = """
+            #nullable enable
+            class Wrapper
+            {
+                public static implicit operator string?(Wrapper? value) => null;
+                public int Length => 1;
+                public void Call() { }
+            }
+            class Example
+            {
+                int? M(Wrapper? value) => value == null {|#0:?|} null : value.Length;
+            }
+            """;
+        const string fixedSource = """
+            #nullable enable
+            class Wrapper
+            {
+                public static implicit operator string?(Wrapper? value) => null;
+                public int Length => 1;
+                public void Call() { }
+            }
+            class Example
+            {
+                int? M(Wrapper? value) => value?.Length;
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(UseNullConditionalAccessAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
+
 }
