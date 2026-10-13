@@ -12,6 +12,8 @@
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.CodeFix.Testing" Version="1.1.4" PrivateAssets="all" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.9.0" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
+    <!-- Override the test harness's NuGet.Packaging transitive dependency for CVE-2026-70162 and CVE-2026-84008. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="9.0.21" PrivateAssets="all" />
     <PackageReference Include="xunit.v3" Version="3.2.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" PrivateAssets="all" />
   </ItemGroup>
