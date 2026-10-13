@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.12 (2026-10-13)
+
+### Bug Fixes
+
+- harden analyzer semantics and ReSharper parity smoke tests (32c49b8)
+
 ## 0.3.11 (2026-10-07)
 
 ### Bug Fixes
