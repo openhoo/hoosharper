@@ -10,6 +10,29 @@ namespace HooSharper.Analyzers.Tests;
 public sealed class WrapFluentChainAnalyzerTests
 {
     [Fact]
+    public Task WrapsChainInsideSingleLineRawStringInterpolation()
+    {
+        const string source = """"
+            class Example
+            {
+                string Run(string value) => $"""account [{{|#0:value.Trim().ToUpperInvariant().PadRight(200)|}}]""";
+            }
+            """";
+        const string fixedSource = """"
+            class Example
+            {
+                string Run(string value) => $"""account [{value
+                    .Trim()
+                    .ToUpperInvariant()
+                    .PadRight(200)}]""";
+            }
+            """";
+        return VerifyWithConfigAsync(source, fixedSource,
+            VerifyCS.Diagnostic(WrapFluentChainAnalyzer.DiagnosticId).WithLocation(0),
+            "hoosharper_max_line_length = 40");
+    }
+
+    [Fact]
     public Task WrapsAtDefault140WithDotLeadingIndentation()
     {
         const string source = """

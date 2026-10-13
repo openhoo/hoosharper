@@ -1,6 +1,15 @@
+using System.Collections.Immutable;
+using HooSharper.Analyzers;
 using HooSharper.CodeFixes;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CodeActions;
+using Microsoft.CodeAnalysis.CodeFixes;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.CSharp.Testing;
+using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Testing;
+using Microsoft.CodeAnalysis.Text;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
     HooSharper.Analyzers.PreferEarlyReturnAnalyzer,
     HooSharper.CodeFixes.PreferEarlyReturnCodeFixProvider>;
@@ -577,6 +586,41 @@ public sealed class PreferEarlyReturnAnalyzerTests
         return VerifyCS.VerifyAnalyzerAsync(source, expected);
     }
 
+    [Theory]
+    [InlineData("Same: Execute();", "Same")]
+    [InlineData("First: Second: Execute();", "Second")]
+    public async Task StaleDiagnosticDoesNotOfferGuardThatHoistsCollidingLabel(
+        string movedStatement, string siblingLabel)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var workspace = new AdhocWorkspace();
+        var project = workspace.AddProject("StaleEarlyReturnLabel", LanguageNames.CSharp)
+            .WithParseOptions(new CSharpParseOptions(LanguageVersion.Latest))
+            .WithCompilationOptions(new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary))
+            .AddMetadataReference(MetadataReference.CreateFromFile(typeof(object).Assembly.Location));
+        var source = "class Example { void Run(bool enabled) { { " + siblingLabel + ": Execute(); } " +
+            "if (enabled) { " + movedStatement + " } } void Execute() { } }";
+        var document = project.AddDocument("Test.cs", SourceText.From(source));
+        var root = await document.GetSyntaxRootAsync(cancellationToken);
+        var compilation = (await document.Project.GetCompilationAsync(cancellationToken))!;
+        Assert.Empty(compilation.GetDiagnostics(cancellationToken).Where(diagnostic =>
+            diagnostic.Severity == DiagnosticSeverity.Error));
+        var analyzer = new PreferEarlyReturnAnalyzer();
+        var diagnostics = await compilation.WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(analyzer))
+            .GetAnalyzerDiagnosticsAsync(cancellationToken);
+        Assert.Empty(diagnostics);
+
+        var ifStatement = root!.DescendantNodes().OfType<IfStatementSyntax>().Single();
+        var diagnostic = Diagnostic.Create(analyzer.SupportedDiagnostics.Single(), ifStatement.IfKeyword.GetLocation());
+        var actions = new List<CodeAction>();
+        var context = new CodeFixContext(document, diagnostic,
+            (action, _) => actions.Add(action), cancellationToken);
+
+        await new PreferEarlyReturnCodeFixProvider().RegisterCodeFixesAsync(context);
+
+        Assert.Empty(actions);
+    }
+
     [Fact]
     public Task ConvertsNestedDesignationWithoutBindingErrors()
     {
@@ -824,6 +868,107 @@ public sealed class PreferEarlyReturnAnalyzerTests
                 }
             }
             """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(PreferEarlyReturnAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+
+    [Fact]
+    public Task DoesNotMoveUsingDeclarationAcrossBackwardGoto()
+    {
+        const string source = """
+            using System.IO;
+
+            class Example
+            {
+                void Run(bool enabled, bool retry)
+                {
+                restart:
+                    System.Console.WriteLine();
+                    if (enabled)
+                    {
+                        using var stream = new MemoryStream();
+                        if (retry)
+                            goto restart;
+                        stream.WriteByte(1);
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+
+    [Fact]
+    public Task ConvertsFinalIfContainingUsingDeclarationWithoutChangingDisposalScope()
+    {
+        const string source = """
+            using System.IO;
+
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    {|#0:if|} (enabled)
+                    {
+                        using var stream = new MemoryStream();
+                        stream.WriteByte(1);
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.IO;
+
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    if (!enabled)
+                        return;
+                    using var stream = new MemoryStream();
+                    stream.WriteByte(1);
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(PreferEarlyReturnAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+
+    [Theory]
+    [InlineData("!ready /* keep once */", "!(!ready) /* keep once */")]
+    [InlineData("ready && other /* keep once */", "!(ready && other) /* keep once */")]
+    [InlineData("(/* keep once */ ready)", "!((/* keep once */ ready))")]
+    [InlineData("(/* first */ ready == other /* second */)", "!((/* first */ ready == other /* second */))")]
+    public Task NegatesCommentedConditionsWithoutDuplicatingOrDroppingTrivia(string condition, string replacement)
+    {
+        var source = $$"""
+            class Example
+            {
+                void Run(bool ready, bool other)
+                {
+                    {|#0:if|} ({{condition}})
+                    {
+                        System.Console.WriteLine();
+                    }
+                }
+            }
+            """;
+        var fixedSource = $$"""
+            class Example
+            {
+                void Run(bool ready, bool other)
+                {
+                    if ({{replacement}})
+                        return;
+                    System.Console.WriteLine();
+                }
+            }
+            """;
+
         return VerifyCS.VerifyCodeFixAsync(source,
             VerifyCS.Diagnostic(PreferEarlyReturnAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
     }

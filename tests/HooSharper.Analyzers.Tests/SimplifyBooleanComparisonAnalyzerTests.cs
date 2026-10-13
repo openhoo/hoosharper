@@ -333,4 +333,61 @@ public sealed class SimplifyBooleanComparisonAnalyzerTests
             VerifyCS.Diagnostic(SimplifyBooleanComparisonAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
     }
 
+    [Fact]
+    public Task DoesNotReportImplicitBooleanConversions()
+    {
+        const string source = """
+            sealed class Flag
+            {
+                public static implicit operator bool(Flag value) => true;
+                public static Flag operator !(Flag value) => value;
+            }
+
+            class Example
+            {
+                object Box(Flag value) => value == true;
+                bool Negate(Flag value) => value == false;
+                bool Reversed(Flag value) => false != value;
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task FixAllPreservesNestedImplicitBooleanConversions()
+    {
+        const string source = """
+            sealed class Flag
+            {
+                public static implicit operator bool(Flag value) => true;
+            }
+
+            class Example
+            {
+                bool Run(Flag value) => (value == true) {|#0:==|} false;
+                bool Cast(Flag value) => (bool)value {|#1:==|} true;
+            }
+            """;
+        const string fixedSource = """
+            sealed class Flag
+            {
+                public static implicit operator bool(Flag value) => true;
+            }
+
+            class Example
+            {
+                bool Run(Flag value) => !(value == true);
+                bool Cast(Flag value) => (bool)value;
+            }
+            """;
+
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(SimplifyBooleanComparisonAnalyzer.DiagnosticId).WithLocation(0),
+            VerifyCS.Diagnostic(SimplifyBooleanComparisonAnalyzer.DiagnosticId).WithLocation(1),
+        };
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
 }

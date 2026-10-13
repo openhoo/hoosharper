@@ -887,4 +887,120 @@ public sealed class PreferLoopContinueAnalyzerTests
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
 
+
+    [Fact]
+    public Task DoesNotMoveUsingDeclarationAcrossBackwardGoto()
+    {
+        const string source = """
+            using System.IO;
+
+            class Example
+            {
+                void Run(bool enabled, bool retry)
+                {
+                    while (true)
+                    {
+                    restart:
+                        System.Console.WriteLine();
+                        if (enabled)
+                        {
+                            using var stream = new MemoryStream();
+                            if (retry)
+                                goto restart;
+                            stream.WriteByte(1);
+                        }
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+
+    [Fact]
+    public Task ConvertsFinalIfContainingUsingDeclarationWithoutChangingIterationDisposalScope()
+    {
+        const string source = """
+            using System.IO;
+
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    while (true)
+                    {
+                        {|#0:if|} (enabled)
+                        {
+                            using var stream = new MemoryStream();
+                            stream.WriteByte(1);
+                        }
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.IO;
+
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    while (true)
+                    {
+                        if (!enabled)
+                            continue;
+                        using var stream = new MemoryStream();
+                        stream.WriteByte(1);
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(PreferLoopContinueAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+
+    [Theory]
+    [InlineData("!ready /* keep once */", "!(!ready) /* keep once */")]
+    [InlineData("ready && other /* keep once */", "!(ready && other) /* keep once */")]
+    [InlineData("(/* keep once */ ready)", "!((/* keep once */ ready))")]
+    [InlineData("(/* first */ ready == other /* second */)", "!((/* first */ ready == other /* second */))")]
+    public Task NegatesCommentedConditionsWithoutDuplicatingOrDroppingTrivia(string condition, string replacement)
+    {
+        var source = $$"""
+            class Example
+            {
+                void Run(bool ready, bool other)
+                {
+                    while (true)
+                    {
+                        {|#0:if|} ({{condition}})
+                        {
+                            System.Console.WriteLine();
+                        }
+                    }
+                }
+            }
+            """;
+        var fixedSource = $$"""
+            class Example
+            {
+                void Run(bool ready, bool other)
+                {
+                    while (true)
+                    {
+                        if ({{replacement}})
+                            continue;
+                        System.Console.WriteLine();
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(PreferLoopContinueAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
 }

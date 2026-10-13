@@ -60,7 +60,8 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
         var receiverOperation = Unwrap(context.SemanticModel.GetOperation(receiver, context.CancellationToken));
         if (HasUnpreservedComment(conditional, access) ||
             !IsStableReceiver(receiverOperation) ||
-            receiverOperation?.Type is null or { TypeKind: TypeKind.Dynamic })
+            receiverOperation?.Type is null or { TypeKind: TypeKind.Dynamic } or
+                INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T })
         {
             return;
         }
@@ -162,7 +163,7 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
             (comparison.IsKind(SyntaxKind.EqualsExpression) ||
              comparison.IsKind(SyntaxKind.NotEqualsExpression)))
         {
-            if (semanticModel.GetOperation(comparison, cancellationToken) is IBinaryOperation { OperatorMethod: null } &&
+            if (HooSharper.Internal.NullComparisonSafety.IsSafeBinary(semanticModel.GetOperation(comparison, cancellationToken)) &&
                 TryGetNullAndReceiver(comparison, out receiver))
             {
                 trueWhenNull = comparison.IsKind(SyntaxKind.EqualsExpression);

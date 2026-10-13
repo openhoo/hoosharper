@@ -17,4 +17,9 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Compile Include="../Shared/ControlFlowScopeSafety.cs" Link="ControlFlowScopeSafety.cs" />
+    <Compile Include="../Shared/NullComparisonSafety.cs" Link="NullComparisonSafety.cs" />
+  </ItemGroup>
+
 </Project>

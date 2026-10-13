@@ -1,0 +1,9 @@
+root = true
+
+[*.cs]
+csharp_prefer_braces = false:suggestion
+resharper_csharp_braces_for_ifelse = not_required
+resharper_remove_redundant_braces_highlighting = hint
+resharper_use_throw_if_null_method_highlighting = hint
+max_line_length = 140
+hoosharper_max_line_length = 140

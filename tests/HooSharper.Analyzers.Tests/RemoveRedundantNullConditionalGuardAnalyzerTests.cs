@@ -666,4 +666,49 @@ public sealed class RemoveRedundantNullConditionalGuardAnalyzerTests
         return test.RunAsync(TestContext.Current.CancellationToken);
     }
 
+    [Fact]
+    public Task PreservesBuiltInReferenceEqualityForTypesWithImplicitConversions()
+    {
+        const string source = """
+            #nullable enable
+            class Wrapper
+            {
+                public static implicit operator string?(Wrapper? value) => null;
+                public int Length => 1;
+                public void Call() { }
+            }
+            class Example
+            {
+                void M(Wrapper? value)
+                {
+                    if (value {|#0:!=|} null)
+                    {
+                        value?.Call();
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            #nullable enable
+            class Wrapper
+            {
+                public static implicit operator string?(Wrapper? value) => null;
+                public int Length => 1;
+                public void Call() { }
+            }
+            class Example
+            {
+                void M(Wrapper? value)
+                {
+                    value?.Call();
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(RemoveRedundantNullConditionalGuardAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
+
 }

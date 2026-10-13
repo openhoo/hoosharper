@@ -138,6 +138,13 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
                     SyntaxFactory.IdentifierName("var"),
                     SyntaxFactory.SingleVariableDesignation(SyntaxFactory.Identifier(valueName))))
             .WithRefKindKeyword(SyntaxFactory.Token(SyntaxKind.OutKeyword));
+        if (invocation.ArgumentList.Arguments[0].NameColon is not null)
+        {
+            // C# 7.0/7.1 do not allow a positional out argument after a named
+            // key argument. Keep both arguments named on every language level.
+            outArgument = outArgument.WithNameColon(SyntaxFactory.NameColon("value"));
+        }
+
         var updatedCondition = invocation
             .WithExpression(tryGetValueMember)
             .WithArgumentList(invocation.ArgumentList.AddArguments(outArgument))
@@ -470,14 +477,29 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
             return true;
         }
 
+        var dictionaryOperation = semanticModel.GetOperation(dictionary, cancellationToken);
         foreach (var node in statement.DescendantNodes(ShouldDescendInto))
         {
+            if (node is ElementAccessExpressionSyntax { ArgumentList.Arguments.Count: 1 } access &&
+                IsSameExpression(access.Expression, dictionary) &&
+                IsSameExpression(access.ArgumentList.Arguments[0].Expression, key) &&
+                (!LookupOperationsMatch(
+                    semanticModel.GetOperation(access.Expression, cancellationToken),
+                    semanticModel.GetOperation(dictionary, cancellationToken)) ||
+                 !LookupOperationsMatch(
+                    semanticModel.GetOperation(access.ArgumentList.Arguments[0].Expression, cancellationToken),
+                    keyOperation)))
+            {
+                return true;
+            }
+
             if (node is AssignmentExpressionSyntax assignment &&
                 (assignment.Left is ElementAccessExpressionSyntax ||
                  IsSameExpression(assignment.Left, dictionary) ||
                  IsSameExpression(assignment.Left, key) ||
                  IsDictionaryIndexer(assignment.Left, dictionary) ||
-                 WritesKeyLocation(assignment.Left, key, keyOperation, semanticModel, cancellationToken)))
+                 WritesLookupLocation(assignment.Left, key, keyOperation, semanticModel, cancellationToken) ||
+                 WritesLookupLocation(assignment.Left, dictionary, dictionaryOperation, semanticModel, cancellationToken)))
             {
                 return true;
             }
@@ -497,7 +519,8 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
                  IsSameExpression(mutatedOperand, dictionary) ||
                  IsSameExpression(mutatedOperand, key) ||
                  IsDictionaryIndexer(mutatedOperand, dictionary) ||
-                 WritesKeyLocation(mutatedOperand, key, keyOperation, semanticModel, cancellationToken)))
+                 WritesLookupLocation(mutatedOperand, key, keyOperation, semanticModel, cancellationToken) ||
+                 WritesLookupLocation(mutatedOperand, dictionary, dictionaryOperation, semanticModel, cancellationToken)))
             {
                 return true;
             }
@@ -558,7 +581,7 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
         return false;
     }
 
-    private static bool WritesKeyLocation(
+    private static bool WritesLookupLocation(
         ExpressionSyntax target,
         ExpressionSyntax key,
         IOperation? keyOperation,
@@ -580,20 +603,16 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
             return true;
         }
 
-        if (target is not MemberAccessExpressionSyntax
-            {
-                Expression: ThisExpressionSyntax,
-                Name: IdentifierNameSyntax memberName,
-            } ||
-            key is not IdentifierNameSyntax keyIdentifier ||
-            keyIdentifier.Identifier.ValueText != memberName.Identifier.ValueText)
+        var targetRoot = Unwrap(semanticModel.GetOperation(target, cancellationToken));
+        for (var reference = Unwrap(keyOperation); reference is not null; reference = GetReceiverInstance(reference))
         {
-            return false;
+            if (ReferenceChainsMatch(targetRoot, reference))
+            {
+                return true;
+            }
         }
 
-        var targetRoot = Unwrap(semanticModel.GetOperation(target, cancellationToken));
-
-        return ReferenceChainsMatch(targetRoot, keyOperation);
+        return false;
     }
 
     private static bool ReferenceChainsMatch(IOperation? left, IOperation? right)
@@ -620,6 +639,29 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
             left = GetReceiverInstance(left);
             right = GetReceiverInstance(right);
         }
+    }
+
+    private static bool LookupOperationsMatch(IOperation? left, IOperation? right)
+    {
+        left = Unwrap(left);
+        right = Unwrap(right);
+        if (left is null || right is null)
+        {
+            return false;
+        }
+
+        if (GetReferencedMember(left) is not null || GetReferencedMember(right) is not null ||
+            left is IInstanceReferenceOperation || right is IInstanceReferenceOperation)
+        {
+            return ReferenceChainsMatch(left, right);
+        }
+
+        return SymbolEqualityComparer.Default.Equals(left.Type, right.Type) &&
+            (left is ILiteralOperation && right is ILiteralOperation &&
+                Equals(left.ConstantValue.Value, right.ConstantValue.Value) ||
+             left is IDefaultValueOperation && right is IDefaultValueOperation ||
+             left is ITypeOfOperation leftTypeOf && right is ITypeOfOperation rightTypeOf &&
+                SymbolEqualityComparer.Default.Equals(leftTypeOf.TypeOperand, rightTypeOf.TypeOperand));
     }
 
     private static ISymbol? GetReferencedMember(IOperation operation) => operation switch

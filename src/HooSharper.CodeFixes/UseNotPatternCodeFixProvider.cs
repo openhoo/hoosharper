@@ -28,7 +28,9 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
             .AncestorsAndSelf().OfType<PrefixUnaryExpressionSyntax>()
             .FirstOrDefault(expression => expression.IsKind(SyntaxKind.LogicalNotExpression));
 
-        if (!TryGetParts(logicalNot, out _, out _, out _))
+        var semanticModel = await context.Document.GetSemanticModelAsync(context.CancellationToken).ConfigureAwait(false);
+        if (logicalNot is null || semanticModel is null ||
+            !new NestedNotPatternRewriter(semanticModel, context.CancellationToken).CanRewrite(logicalNot))
         {
             return;
         }
@@ -58,7 +60,13 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
             return document;
         }
 
-        var rewrittenTarget = (ExpressionSyntax)new NestedNotPatternRewriter(semanticModel, cancellationToken).Visit(target)!;
+        var rewriter = new NestedNotPatternRewriter(semanticModel, cancellationToken);
+        if (!rewriter.CanRewrite(logicalNot))
+        {
+            return document;
+        }
+
+        var rewrittenTarget = (ExpressionSyntax)rewriter.Visit(target)!;
         var replacement = CreatePatternReplacement(logicalNot, rewrittenTarget, isKeyword, pattern);
         return document.WithSyntaxRoot(root.ReplaceNode(logicalNot, replacement));
     }
@@ -96,12 +104,20 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
         SemanticModel semanticModel,
         CancellationToken cancellationToken) : CSharpSyntaxRewriter
     {
+        internal bool CanRewrite(PrefixUnaryExpressionSyntax node) =>
+            node.SyntaxTree.Options is CSharpParseOptions parseOptions &&
+            (parseOptions.LanguageVersion == LanguageVersion.Default ||
+             parseOptions.LanguageVersion >= LanguageVersion.CSharp9) &&
+            node.IsKind(SyntaxKind.LogicalNotExpression) &&
+            !node.ContainsDiagnostics &&
+            TryGetParts(node, out var target, out _, out _) &&
+            !IsWithinExpressionTree(node) && IsSupportedTypeTest(node, target);
+
         public override SyntaxNode? VisitPrefixUnaryExpression(PrefixUnaryExpressionSyntax node)
         {
             // Check the original tree before visiting: rewritten nodes cannot be
             // queried through the original semantic model.
-            var canRewrite = TryGetParts(node, out var originalTarget, out _, out _) &&
-                !IsWithinExpressionTree(node) && IsSupportedTypeTest(node, originalTarget);
+            var canRewrite = CanRewrite(node);
             var visited = (PrefixUnaryExpressionSyntax)base.VisitPrefixUnaryExpression(node)!;
             return canRewrite && TryGetParts(visited, out var target, out var isKeyword, out var pattern)
                 ? CreatePatternReplacement(visited, target, isKeyword, pattern)
@@ -140,6 +156,7 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
             var type = expression switch
             {
                 IsPatternExpressionSyntax { Pattern: TypePatternSyntax pattern } => pattern.Type,
+                IsPatternExpressionSyntax { Pattern: DeclarationPatternSyntax pattern } => pattern.Type,
                 BinaryExpressionSyntax { Right: TypeSyntax testedType } => testedType,
                 _ => null,
             };
@@ -150,9 +167,35 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
 
             var targetType = semanticModel.GetTypeInfo(target, cancellationToken).Type;
             var matchedType = semanticModel.GetTypeInfo(type, cancellationToken).Type;
-            return targetType is null || matchedType is null || !targetType.IsValueType ||
-                targetType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T ||
-                !SymbolEqualityComparer.Default.Equals(targetType, matchedType);
+            if (targetType is null || matchedType is null ||
+                targetType.TypeKind == TypeKind.Error || matchedType.TypeKind == TypeKind.Error)
+            {
+                return false;
+            }
+
+            var nullableTarget = targetType is INamedTypeSymbol
+            {
+                OriginalDefinition.SpecialType: SpecialType.System_Nullable_T,
+            };
+            var effectiveTarget = nullableTarget
+                ? ((INamedTypeSymbol)targetType).TypeArguments[0]
+                : targetType;
+            if (effectiveTarget.TypeKind == TypeKind.Dynamic)
+            {
+                effectiveTarget = semanticModel.Compilation.GetSpecialType(SpecialType.System_Object);
+            }
+            var conversion = semanticModel.Compilation.ClassifyConversion(effectiveTarget, matchedType);
+            // Negating an always-matching value-type test creates a prohibited pattern.
+            if (!nullableTarget && targetType.IsValueType &&
+                (conversion.IsIdentity || conversion.IsBoxing && conversion.IsImplicit))
+            {
+                return false;
+            }
+
+            // Legacy is-type expressions allow impossible tests as warnings; not patterns
+            // require compatible types and turn these expressions into compiler errors.
+            return conversion.IsIdentity || conversion.IsReference || conversion.IsBoxing || conversion.IsUnboxing ||
+                effectiveTarget.TypeKind == TypeKind.TypeParameter || matchedType.TypeKind == TypeKind.TypeParameter;
         }
     }
 
@@ -173,7 +216,7 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
 
         switch (expression)
         {
-            case IsPatternExpressionSyntax isPattern when !ContainsDesignation(isPattern.Pattern):
+            case IsPatternExpressionSyntax isPattern when IsSupportedPattern(isPattern.Pattern):
                 target = isPattern.Expression;
                 isKeyword = isPattern.IsKeyword;
                 pattern = isPattern.Pattern;
@@ -228,4 +271,10 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
 
     private static bool ContainsDesignation(PatternSyntax pattern) =>
         pattern.DescendantNodesAndSelf().Any(node => node is VariableDesignationSyntax);
+
+    private static bool IsSupportedPattern(PatternSyntax pattern) =>
+        pattern is DeclarationPatternSyntax
+        {
+            Designation: SingleVariableDesignationSyntax { Identifier.IsMissing: false } or DiscardDesignationSyntax,
+        } || !ContainsDesignation(pattern);
 }

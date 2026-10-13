@@ -11,3 +11,4 @@ artifacts/
 node_modules/
 
 BenchmarkDotNet.Artifacts/
+__pycache__/

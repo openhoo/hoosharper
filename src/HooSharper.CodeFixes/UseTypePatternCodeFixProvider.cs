@@ -197,10 +197,7 @@ public sealed class UseTypePatternCodeFixProvider : CodeFixProvider
         var nullCheck = WalkDownParentheses(ifStatement.Condition);
         if (checkedIdentifier is null ||
             (nullCheck is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.NotEqualsExpression } &&
-             semanticModel.GetOperation(nullCheck, cancellationToken) is not IBinaryOperation
-             {
-                 OperatorMethod: null,
-             }))
+             !HooSharper.Internal.NullComparisonSafety.IsSafeBinary(semanticModel.GetOperation(nullCheck, cancellationToken))))
         {
             return false;
         }
@@ -209,6 +206,11 @@ public sealed class UseTypePatternCodeFixProvider : CodeFixProvider
         var checkedSymbol = semanticModel.GetSymbolInfo(checkedIdentifier, cancellationToken).Symbol;
         if (local is null ||
             !SymbolEqualityComparer.Default.Equals(local, checkedSymbol))
+        {
+            return false;
+        }
+
+        if (!PreservesNullableDeclaration(local, ifStatement.Statement, semanticModel))
         {
             return false;
         }
@@ -298,6 +300,36 @@ public sealed class UseTypePatternCodeFixProvider : CodeFixProvider
         }
 
         return false;
+    }
+
+    private static bool PreservesNullableDeclaration(
+        ILocalSymbol local,
+        StatementSyntax body,
+        SemanticModel semanticModel)
+    {
+        if (local.Type.NullableAnnotation != NullableAnnotation.Annotated)
+        {
+            return true;
+        }
+
+        // The as-inferred local can accept null, while a declaration-pattern
+        // local has a non-nullable declaration type. Writes (including ref/out)
+        // would therefore introduce nullable warnings after the rewrite.
+        var dataFlow = semanticModel.AnalyzeDataFlow(body);
+        if (dataFlow is not { Succeeded: true })
+        {
+            return false;
+        }
+
+        foreach (var written in dataFlow.WrittenInside)
+        {
+            if (SymbolEqualityComparer.Default.Equals(local, written))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool IsNullableValueType(ITypeSymbol type) =>

@@ -1,4 +1,13 @@
+using System.Collections.Immutable;
+using HooSharper.Analyzers;
 using HooSharper.CodeFixes;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CodeActions;
+using Microsoft.CodeAnalysis.CodeFixes;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Text;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
     HooSharper.Analyzers.RemoveRedundantElseAnalyzer,
     HooSharper.CodeFixes.RemoveRedundantElseCodeFixProvider>;
@@ -308,6 +317,58 @@ public sealed class RemoveRedundantElseAnalyzerTests
     }
 
     [Fact]
+    public Task PreservesElseLabelScopeAgainstSiblingLabel()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    {
+                    again:
+                        Execute();
+                    }
+                    if (enabled)
+                    {
+                        return;
+                    }
+                    {|#0:else|}
+                    {
+                    again:
+                        Execute();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    {
+                    again:
+                        Execute();
+                    }
+                    if (enabled)
+                    {
+                        return;
+                    }
+                    {
+                    again:
+                        Execute();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(RemoveRedundantElseAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+    [Fact]
     public Task DoesNotReportNonterminatingBranch()
     {
         const string source = """
@@ -604,6 +665,258 @@ public sealed class RemoveRedundantElseAnalyzerTests
             """;
         return VerifyCS.VerifyCodeFixAsync(source,
             VerifyCS.Diagnostic(RemoveRedundantElseAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+
+    [Fact]
+    public Task DoesNotRemoveElseAcrossConditionalTermination()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    if (enabled)
+                    {
+            #if FALLTHROUGH
+                        Execute();
+            #else
+                        return;
+            #endif
+                    }
+                    else
+                    {
+                        Execute();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task FixAllRemovesElseAfterNestedTerminatingIfArms()
+    {
+        const string source = """
+            class Example
+            {
+                int GetValue(bool enabled, bool inner)
+                {
+                    if (enabled)
+                    {
+                        if (inner)
+                        {
+                            return 1;
+                        }
+                        {|#0:else|}
+                        {
+                            return 2;
+                        }
+                    }
+                    {|#1:else|}
+                    {
+                        return 3;
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                int GetValue(bool enabled, bool inner)
+                {
+                    if (enabled)
+                    {
+                        if (inner)
+                        {
+                            return 1;
+                        }
+                        return 2;
+                    }
+                    return 3;
+                }
+            }
+            """;
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(RemoveRedundantElseAnalyzer.DiagnosticId).WithLocation(0),
+            VerifyCS.Diagnostic(RemoveRedundantElseAnalyzer.DiagnosticId).WithLocation(1),
+        };
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
+    [Fact]
+    public Task RemovesElseAfterTerminatingTryCatchFinally()
+    {
+        const string source = """
+            using System;
+
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    if (enabled)
+                    {
+                        try
+                        {
+                            Execute();
+                            return;
+                        }
+                        catch (Exception)
+                        {
+                            throw;
+                        }
+                        finally
+                        {
+                            Cleanup();
+                        }
+                    }
+                    {|#0:else|}
+                    {
+                        Execute();
+                    }
+                }
+
+                void Execute() { }
+                void Cleanup() { }
+            }
+            """;
+        const string fixedSource = """
+            using System;
+
+            class Example
+            {
+                void Run(bool enabled)
+                {
+                    if (enabled)
+                    {
+                        try
+                        {
+                            Execute();
+                            return;
+                        }
+                        catch (Exception)
+                        {
+                            throw;
+                        }
+                        finally
+                        {
+                            Cleanup();
+                        }
+                    }
+                    Execute();
+                }
+
+                void Execute() { }
+                void Cleanup() { }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(RemoveRedundantElseAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+    [Theory]
+    [InlineData("try { return; } catch (System.Exception) { throw; }")]
+    [InlineData("try { return; } finally { Execute(); }")]
+    [InlineData("try { Execute(); } finally { throw new System.Exception(); }")]
+    [InlineData("switch (inner) { case true: return; default: throw new System.Exception(); }")]
+    public Task ReportsCompoundBranchWithUnreachableEndpoint(string statement)
+    {
+        var source = "class Example { void Run(bool enabled, bool inner) { if (enabled) { " + statement +
+            " } {|#0:else|} { Execute(); } } void Execute() { } }";
+        return VerifyCS.VerifyAnalyzerAsync(source,
+            VerifyCS.Diagnostic(RemoveRedundantElseAnalyzer.DiagnosticId).WithLocation(0));
+    }
+
+    [Fact]
+    public Task StillReportsDirectTerminalBranchWhenConditionIsConstantFalse()
+    {
+        const string source = """
+            class Example
+            {
+                void Run()
+                {
+                    if (false)
+                    {
+                        return;
+                    }
+                    {|#0:else|}
+                    {
+                        Execute();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source,
+            VerifyCS.Diagnostic(RemoveRedundantElseAnalyzer.DiagnosticId).WithLocation(0));
+    }
+
+    [Theory]
+    [InlineData("if (inner) return;")]
+    [InlineData("try { if (inner) return; } catch (System.Exception) { throw; }")]
+    [InlineData("try { return; } catch (System.Exception) { Execute(); }")]
+    [InlineData("try { Execute(); } finally { Execute(); }")]
+    [InlineData("switch (inner) { case true: return; default: break; }")]
+    public Task DoesNotReportCompoundBranchWithReachableEndpoint(string statement)
+    {
+        var source = "class Example { void Run(bool enabled, bool inner) { if (enabled) { " + statement +
+            " } else { Execute(); } } void Execute() { } }";
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Theory]
+    [InlineData("if () return; else throw new System.Exception();")]
+    [InlineData("try { return; } catch (System.Exception) { throw new ; }")]
+    public async Task MalformedCompoundBranchDoesNotReportOrThrow(string statement)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var source = "class Example { void Run(bool enabled) { if (enabled) { " + statement +
+            " } else { Execute(); } } void Execute() { } }";
+        var tree = CSharpSyntaxTree.ParseText(source, cancellationToken: cancellationToken);
+        var compilation = CSharpCompilation.Create("MalformedElse", [tree],
+            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        Assert.Contains(compilation.GetDiagnostics(cancellationToken), diagnostic =>
+            diagnostic.Severity == DiagnosticSeverity.Error);
+        var diagnostics = await compilation.WithAnalyzers(
+                ImmutableArray.Create<DiagnosticAnalyzer>(new RemoveRedundantElseAnalyzer()))
+            .GetAnalyzerDiagnosticsAsync(cancellationToken);
+        Assert.Empty(diagnostics);
+    }
+
+    [Theory]
+    [InlineData("if (inner) return;")]
+    [InlineData("try { return; } catch (System.Exception) { Execute(); }")]
+    [InlineData("try { Execute(); } finally { Execute(); }")]
+    [InlineData("if () return; else throw new System.Exception();")]
+    [InlineData("#if SOMETIMES\nreturn;\n#endif\n")]
+    public async Task StaleDiagnosticDoesNotOfferUnsafeElseRemoval(string statement)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var workspace = new AdhocWorkspace();
+        var project = workspace.AddProject("StaleElseDiagnostic", LanguageNames.CSharp)
+            .WithParseOptions(new CSharpParseOptions(LanguageVersion.Latest))
+            .WithCompilationOptions(new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary))
+            .AddMetadataReference(MetadataReference.CreateFromFile(typeof(object).Assembly.Location));
+        var source = "class Example { void Run(bool enabled, bool inner) { if (enabled) {\n" + statement +
+            "\n} else { Execute(); } } void Execute() { } }";
+        var document = project.AddDocument("Test.cs", SourceText.From(source));
+        var root = await document.GetSyntaxRootAsync(cancellationToken);
+        var ifStatement = root!.DescendantNodes().OfType<IfStatementSyntax>().First();
+        var descriptor = new RemoveRedundantElseAnalyzer().SupportedDiagnostics.Single();
+        var diagnostic = Diagnostic.Create(descriptor, ifStatement.Else!.ElseKeyword.GetLocation());
+        var actions = new List<CodeAction>();
+        var context = new CodeFixContext(document, diagnostic,
+            (action, _) => actions.Add(action), cancellationToken);
+
+        await new RemoveRedundantElseCodeFixProvider().RegisterCodeFixesAsync(context);
+
+        Assert.Empty(actions);
     }
 
 }

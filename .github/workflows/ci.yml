@@ -93,6 +93,12 @@ jobs:
             if (actual < threshold) exit 1
           }'
 
+      - name: Verify report normalization and source provenance
+        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+
+      - name: Verify executable analyzer and Fix All matrix
+        run: python3 scripts/verify-matrix.py --no-build
+
       - name: Validate benchmark fixtures
         run: >-
           dotnet run --project benchmarks/HooSharper.Performance/HooSharper.Performance.csproj

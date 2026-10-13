@@ -104,11 +104,15 @@ public sealed class SimplifyBooleanComparisonCodeFixProvider : CodeFixProvider
     private static bool IsSafeComparison(IOperation? operation) =>
         operation is IBinaryOperation binary &&
         binary.OperatorMethod is null &&
-        binary.LeftOperand.Type?.SpecialType == SpecialType.System_Boolean &&
-        binary.RightOperand.Type?.SpecialType == SpecialType.System_Boolean &&
+        IsBooleanOperand(binary.LeftOperand) &&
+        IsBooleanOperand(binary.RightOperand) &&
         binary.Type?.SpecialType == SpecialType.System_Boolean &&
         !binary.DescendantsAndSelf().OfType<IUnaryOperation>().Any(unary =>
             unary.OperatorKind == UnaryOperatorKind.Not && unary.OperatorMethod is not null);
+
+    private static bool IsBooleanOperand(IOperation operation) =>
+        operation.Type?.SpecialType == SpecialType.System_Boolean &&
+        operation is not IConversionOperation { IsImplicit: true, OperatorMethod: not null };
 
     private static SyntaxTriviaList CollectInterstitialTrivia(
         BinaryExpressionSyntax comparison,

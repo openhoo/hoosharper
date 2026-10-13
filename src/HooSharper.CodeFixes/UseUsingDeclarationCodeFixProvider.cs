@@ -28,7 +28,10 @@ public sealed class UseUsingDeclarationCodeFixProvider : CodeFixProvider
         var usingStatement = root?.FindToken(diagnostic.Location.SourceSpan.Start).Parent?
             .AncestorsAndSelf().OfType<UsingStatementSyntax>().FirstOrDefault();
 
-        if (usingStatement is null)
+        var semanticModel = await context.Document.GetSemanticModelAsync(context.CancellationToken).ConfigureAwait(false);
+        if (usingStatement is null || semanticModel is null ||
+            !HooSharper.Internal.ControlFlowScopeSafety.CanConvertUsingStatement(
+                usingStatement, semanticModel, context.CancellationToken))
         {
             return;
         }
@@ -58,7 +61,10 @@ public sealed class UseUsingDeclarationCodeFixProvider : CodeFixProvider
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
         var sourceText = await document.GetTextAsync(cancellationToken).ConfigureAwait(false);
-        if (root is null ||
+        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+        if (root is null || semanticModel is null ||
+            !HooSharper.Internal.ControlFlowScopeSafety.CanConvertUsingStatement(
+                usingStatement, semanticModel, cancellationToken) ||
             usingStatement.Parent is not BlockSyntax parentBlock ||
             usingStatement.Declaration is not { } declaration ||
             usingStatement.Statement is not BlockSyntax body)

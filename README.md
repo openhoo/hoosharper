@@ -350,13 +350,29 @@ All rules below use category `HooSharper.CodeStyle`, default to Info severity, a
 | `HOO1013` | Use a terminal using declaration | `using (var x = Open()) { Work(x); }` → `using var x = Open(); Work(x);` |
 | `HOO1014` | Use a null-coalescing expression | `x is null ? fallback : x` → `x ?? fallback` |
 | `HOO1015` | Use null-conditional access | `x is null ? null : x.Value` → `x?.Value` |
-| `HOO1016` | Use `string.Contains` for a presence test | `text.IndexOf(value) >= 0` → `text.Contains(value)` |
+| `HOO1016` | Use `string.Contains` for a presence test | `text.IndexOf('x') >= 0` → `text.Contains('x')` |
 | `HOO1017` | Simplify opposite boolean returns | `if (ready) return true; return false;` → `return ready;` |
 | `HOO1018` | Remove a redundant guard around `?.` | `if (x is not null) x?.Run();` → `x?.Run();` |
 | `HOO1019` | Use a `not` pattern | `!(x is string)` → `x is not string` |
 | `HOO1020` | Wrap long fluent chains | Place every continuation `.` at the start of its own line. |
 
 The analyzers deliberately skip ambiguous transformations, including overloaded equality operators, nullable boolean comparisons, unstable expressions with side effects, directive-containing regions, mismatched symbols, changed disposal scope, unavailable framework APIs, unsupported C# language versions, expression-tree-incompatible syntax, scope-expanding declaration collisions, dictionary indexer writes/by-reference uses, implicit callbacks before a dictionary read (including property getters and user-defined conversions/operators), and collection arguments that comparer callbacks could mutate. Dictionary and set rules are restricted to standard framework types and callback-stable receivers, keys, and values.
+
+`HOO1016` supports `char` presence tests with or without `StringComparison`, and
+`string` presence tests with an explicit `StringComparison`. The target framework
+must provide the matching `Contains` overload. String overloads without an explicit
+comparison are skipped because their default comparison behavior differs.
+
+Safety checks also preserve implicit user conversions, nullable member binding,
+nullable local writes, and named argument binding. Declaration rewrites skip
+backward jumps that would cross a new using declaration. Dictionary lookups skip
+shadowed symbols and changes to any part of the receiver or key reference chain.
+
+`HOO1008` also accepts a negated built-in `Nullable<T>.HasValue` check on a
+stable local, parameter, or field. `HOO1019` accepts simple declaration patterns
+under logical negation while preserving the variable's definite assignment.
+Redundant-else removal uses semantic control flow to recognize branches whose
+nested `if` or `try` statements cannot fall through.
 
 #### Fluent-chain line length
 
@@ -496,6 +512,46 @@ dotnet test tests/HooSharper.Analyzers.Tests/HooSharper.Analyzers.Tests.csproj \
 ```
 
 The custom test verifier is in `tests/HooSharper.Analyzers.Tests/AnalyzerVerifier.cs`.
+
+### Executable smoke tests and ReSharper comparisons
+
+Run the fast project smoke gate after a Release solution build:
+
+```bash
+python3 -m unittest discover -s scripts -p 'test_*.py' -v
+python3 scripts/verify-matrix.py --no-build
+```
+
+The executable matrix covers all 20 diagnostics, independent project Fix All,
+cumulative Fix All until no diagnostics remain, compiler validity, nullable
+warning counts, comment preservation, and before/after runtime output. It also
+contains executable negative controls for unsafe transformations. The smoke tool
+loads real MSBuild projects and compares sequential and concurrent diagnostics.
+Fixed exports use fresh directories and a checked source hash manifest.
+
+For the extended native comparison, install JetBrains.ReSharper.GlobalTools
+**2026.2.3.1** in an isolated tool directory and run:
+
+```bash
+python3 scripts/verify-resharper-smoke.py --dotnet /absolute/path/to/dotnet \
+  --jb /absolute/path/to/jb --work-dir /absolute/path/to/smoke-evidence
+```
+
+This runs the matrix and pinned Dapper 2.1.66, Newtonsoft.Json 13.0.3, and Serilog
+4.0.0 projects against their selected modern target and .NET Standard 2.0.
+Reports retain source/configuration/reference and assembly hashes,
+raw native findings, mapped inspection opportunities, and unmatched findings for
+source review. Native XML reports have paired capture manifests; comparison
+rejects changed sources/configuration, mismatched reports, and missing fresh
+outputs. Reused checkouts are checked against pinned Git blobs and file modes,
+including hidden edits, staged additions, and ignored inputs outside generated
+`bin`/`obj` directories. Seventeen rules have mapped native InspectCode inspections;
+HOO1010, HOO1016, and HOO1020 have no matching inspection in this catalog.
+ReSharper's own Roslyn analyzer findings are excluded from native counts.
+Different rule scope, enabled settings, and diagnostic spans require review;
+matching counts do not establish semantic parity. This test does not exercise
+interactive Rider/ReSharper quick-fix UI behavior. The extended corpus is run
+separately from ordinary CI. See [the review report](docs/reviews/2026-10-13-review.md).
 
 ### Performance benchmarks
 

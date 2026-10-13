@@ -56,7 +56,9 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
             body.Statements.Count == 0 ||
             ifStatement.ContainsDirectives ||
             ifStatement.Parent is not BlockSyntax parentBlock ||
-            HasBindingCollision(ifStatement, parentBlock, body))
+            HasBindingCollision(ifStatement, parentBlock, body) ||
+            HooSharper.Internal.ControlFlowScopeSafety.HoistingBodyCrossesUsingDeclaration(
+                body, parentBlock, semanticModel, cancellationToken))
         {
             return document;
         }
@@ -229,6 +231,14 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
     {
         var originalCondition = condition;
         condition = WalkDownParentheses(condition);
+        if (condition != originalCondition &&
+            HasSignificantTrivia(originalCondition.DescendantTrivia(descendIntoTrivia: true)))
+        {
+            // Removing these parentheses would also remove comments attached
+            // to their interior operand edges.
+            return ParenthesizedNegation(originalCondition);
+        }
+
         return condition switch
         {
             PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression } logicalNot
@@ -285,5 +295,7 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
     private static PrefixUnaryExpressionSyntax ParenthesizedNegation(ExpressionSyntax condition) =>
         SyntaxFactory.PrefixUnaryExpression(
             SyntaxKind.LogicalNotExpression,
-            SyntaxFactory.ParenthesizedExpression(condition));
+            // The caller restores the original condition's edge trivia on the
+            // complete negation. Keeping it here as well duplicates comments.
+            SyntaxFactory.ParenthesizedExpression(condition.WithoutTrivia()));
 }

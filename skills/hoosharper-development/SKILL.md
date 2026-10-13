@@ -76,3 +76,17 @@ negative example. Keep local packages/build output out of Git.
 Report actual tests, coverage/package evidence where applicable, and any
 unavailable gates. Documentation/skill changes need link and installation checks;
 they do not require new semantic tests.
+
+## Project smoke and native comparison
+
+After building the Release solution, run `python3 scripts/verify-matrix.py --no-build`
+and `python3 -m unittest discover -s scripts -p 'test_*.py' -v`. The matrix must
+exercise all 20 IDs, compile each project Fix All, converge cumulatively, preserve
+nullable warning counts and comments, and produce the same executable output.
+
+For extended qualification use `scripts/verify-resharper-smoke.py` with the pinned
+ReSharper CLI, SDK, and an owned work directory; see README. Preserve raw reports,
+source/configuration/reference hashes, and analyzer/fixer assembly hashes. Review
+unmatched native opportunities before classifying them as defects. This command
+adapts only cloned SDK policy and comparison settings, and refuses modified C#
+sources. Native inspection results do not qualify interactive IDE quick-fix UI.

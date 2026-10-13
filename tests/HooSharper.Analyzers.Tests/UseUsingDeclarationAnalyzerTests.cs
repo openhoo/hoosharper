@@ -143,6 +143,85 @@ public sealed class UseUsingDeclarationAnalyzerTests
     }
 
     [Fact]
+    public Task DoesNotHoistUsingBodyLabelOverSiblingLabel()
+    {
+        const string source = """
+            using System.IO;
+
+            class Example
+            {
+                void Run()
+                {
+                    {
+                    again:
+                        Execute();
+                    }
+                    using (var stream = new MemoryStream())
+                    {
+                    again:
+                        stream.Flush();
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task ReportsUsingBodyLabelWithoutSiblingCollision()
+    {
+        const string source = """
+            using System.IO;
+
+            class Example
+            {
+                void Run()
+                {
+                    {|#0:using|} (var stream = new MemoryStream())
+                    {
+                    ready:
+                        stream.Flush();
+                    }
+                }
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source,
+            VerifyCS.Diagnostic(UseUsingDeclarationAnalyzer.DiagnosticId).WithLocation(0));
+    }
+
+    [Fact]
+    public Task ReportsUsingWhenSiblingLabelsRemainInSeparateNestedBlocks()
+    {
+        const string source = """
+            using System.IO;
+
+            class Example
+            {
+                void Run()
+                {
+                    {
+                    again:
+                        Execute();
+                    }
+                    {|#0:using|} (var stream = new MemoryStream())
+                    {
+                        {
+                        again:
+                            stream.Flush();
+                        }
+                    }
+                }
+
+                void Execute() { }
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source,
+            VerifyCS.Diagnostic(UseUsingDeclarationAnalyzer.DiagnosticId).WithLocation(0));
+    }
+
+    [Fact]
     public Task ReportsWhenBodyIntroducesDifferentKindsOfNamesWithoutCollision()
     {
         const string source = """
@@ -842,6 +921,203 @@ public sealed class UseUsingDeclarationAnalyzerTests
             """;
 
         return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+
+    [Fact]
+    public Task DoesNotHoistInitializerOutVariableOverEarlierMemberReference()
+    {
+        const string source = """
+            using System.IO;
+
+            class Example
+            {
+                int value = 42;
+
+                void Run()
+                {
+                    System.Console.WriteLine(value);
+                    using (var stream = Create(out int value))
+                    {
+                        stream.WriteByte((byte)value);
+                    }
+                }
+
+                MemoryStream Create(out int result)
+                {
+                    result = 1;
+                    return new MemoryStream();
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task DoesNotMoveUsingDeclarationAcrossBackwardGoto()
+    {
+        const string source = """
+            using System.IO;
+
+            class Example
+            {
+                void Run(bool retry)
+                {
+                restart:
+                    System.Console.WriteLine();
+                    using (var stream = new MemoryStream())
+                    {
+                        if (retry)
+                            goto restart;
+                        stream.WriteByte(1);
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+
+    [Fact]
+    public Task FixAllPreservesUnsafeUsingStatementsAndConvertsSafeInitializerDesignation()
+    {
+        const string source = """
+            using System.IO;
+
+            class Example
+            {
+                int value = 42;
+
+                void UnsafeOut()
+                {
+                    System.Console.WriteLine(value);
+                    using (var stream = Create(out int value))
+                    {
+                        stream.WriteByte((byte)value);
+                    }
+                }
+
+                void UnsafeGoto(bool retry)
+                {
+                restart:
+                    System.Console.WriteLine();
+                    using (var stream = new MemoryStream())
+                    {
+                        if (retry)
+                            goto restart;
+                        stream.WriteByte(1);
+                    }
+                }
+
+                void SafeOut()
+                {
+                    {|#0:using|} (var stream = Create(out int result) ?? new MemoryStream(result))
+                    {
+                        stream.WriteByte((byte)result);
+                    }
+                }
+
+                MemoryStream Create(out int result)
+                {
+                    result = 1;
+                    return new MemoryStream();
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.IO;
+
+            class Example
+            {
+                int value = 42;
+
+                void UnsafeOut()
+                {
+                    System.Console.WriteLine(value);
+                    using (var stream = Create(out int value))
+                    {
+                        stream.WriteByte((byte)value);
+                    }
+                }
+
+                void UnsafeGoto(bool retry)
+                {
+                restart:
+                    System.Console.WriteLine();
+                    using (var stream = new MemoryStream())
+                    {
+                        if (retry)
+                            goto restart;
+                        stream.WriteByte(1);
+                    }
+                }
+
+                void SafeOut()
+                {
+                    using var stream = Create(out int result) ?? new MemoryStream(result);
+                    stream.WriteByte((byte)result);
+                }
+
+                MemoryStream Create(out int result)
+                {
+                    result = 1;
+                    return new MemoryStream();
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(source,
+            new[] { VerifyCS.Diagnostic(UseUsingDeclarationAnalyzer.DiagnosticId).WithLocation(0) },
+            fixedSource, fixedSource);
+    }
+
+
+    [Fact]
+    public Task ConvertsUsingWhenBackwardGotoExitsContainingBlock()
+    {
+        const string source = """
+            using System.IO;
+
+            class Example
+            {
+                void Run(bool retry)
+                {
+                restart:
+                    System.Console.WriteLine();
+                    {
+                        {|#0:using|} (var stream = new MemoryStream())
+                        {
+                            if (retry)
+                                goto restart;
+                            stream.WriteByte(1);
+                        }
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.IO;
+
+            class Example
+            {
+                void Run(bool retry)
+                {
+                restart:
+                    System.Console.WriteLine();
+                    {
+                        using var stream = new MemoryStream();
+                        if (retry)
+                            goto restart;
+                        stream.WriteByte(1);
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(UseUsingDeclarationAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
     }
 
 }

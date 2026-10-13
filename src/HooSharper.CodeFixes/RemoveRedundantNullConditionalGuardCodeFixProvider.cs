@@ -45,6 +45,13 @@ public sealed class RemoveRedundantNullConditionalGuardCodeFixProvider : CodeFix
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+        if (semanticModel is null ||
+            !HooSharper.Internal.NullComparisonSafety.IsSafeNullCheck(
+                ifStatement.Condition, semanticModel, cancellationToken))
+        {
+            return document;
+        }
         if (root is null ||
             ifStatement.Statement is not BlockSyntax { Statements.Count: 1 } block ||
             block.Statements[0] is not ExpressionStatementSyntax expressionStatement)

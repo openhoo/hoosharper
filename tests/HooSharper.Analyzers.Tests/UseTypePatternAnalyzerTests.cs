@@ -486,4 +486,75 @@ public sealed class UseTypePatternAnalyzerTests
             VerifyCS.Diagnostic(UseTypePatternAnalyzer.DiagnosticId).WithLocation(0),
             fixedSource);
     }
+    [Fact]
+    public Task DoesNotChangeNullableLocalDeclarationWhenWrittenInsideBody()
+    {
+        const string source = """
+            #nullable enable
+            class Example
+            {
+                static void Update(ref string? value) => value = null;
+
+                void Assignment(object value)
+                {
+                    var text = value as string;
+                    if (text != null)
+                    {
+                        text = null;
+                    }
+                }
+
+                void Reference(object value)
+                {
+                    var text = value as string;
+                    if (text != null)
+                    {
+                        Update(ref text);
+                    }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task PreservesBuiltInAsResultEqualityForTypesWithImplicitConversions()
+    {
+        const string source = """
+            #nullable enable
+            class Wrapper
+            {
+                public static implicit operator string?(Wrapper? value) => null;
+            }
+            class Example
+            {
+                void Run(object value)
+                {
+                    var wrapper = value {|#0:as|} Wrapper;
+                    if (wrapper != null) { }
+                }
+            }
+            """;
+        const string fixedSource = """
+            #nullable enable
+            class Wrapper
+            {
+                public static implicit operator string?(Wrapper? value) => null;
+            }
+            class Example
+            {
+                void Run(object value)
+                {
+                    if (value is Wrapper wrapper) { }
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(UseTypePatternAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
+
 }

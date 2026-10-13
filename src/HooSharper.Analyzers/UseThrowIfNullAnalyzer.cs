@@ -109,7 +109,7 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
         {
             checkedExpression = WalkDownParentheses(expression);
             location = isKeyword.GetLocation();
-            return !IsPointer(checkedExpression, context);
+            return CanPassToThrowIfNull(checkedExpression, context);
         }
 
         if (condition is BinaryExpressionSyntax
@@ -117,24 +117,21 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
                 RawKind: (int)SyntaxKind.EqualsExpression,
                 OperatorToken: var operatorToken,
             } equality &&
-            context.SemanticModel.GetOperation(equality, context.CancellationToken) is IBinaryOperation
-            {
-                OperatorMethod: null,
-                Type.TypeKind: not TypeKind.Dynamic,
-            })
+            HooSharper.Internal.NullComparisonSafety.IsSafeBinary(
+                context.SemanticModel.GetOperation(equality, context.CancellationToken)))
         {
             if (equality.Left.IsKind(SyntaxKind.NullLiteralExpression))
             {
                 checkedExpression = WalkDownParentheses(equality.Right);
                 location = operatorToken.GetLocation();
-                return !IsPointer(checkedExpression, context);
+                return CanPassToThrowIfNull(checkedExpression, context);
             }
 
             if (equality.Right.IsKind(SyntaxKind.NullLiteralExpression))
             {
                 checkedExpression = WalkDownParentheses(equality.Left);
                 location = operatorToken.GetLocation();
-                return !IsPointer(checkedExpression, context);
+                return CanPassToThrowIfNull(checkedExpression, context);
             }
         }
 
@@ -142,8 +139,14 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
         location = null!;
         return false;
     }
-    private static bool IsPointer(ExpressionSyntax expression, SyntaxNodeAnalysisContext context) =>
-        context.SemanticModel.GetTypeInfo(expression, context.CancellationToken).Type?.TypeKind is TypeKind.Pointer or TypeKind.FunctionPointer;
+    private static bool CanPassToThrowIfNull(ExpressionSyntax expression, SyntaxNodeAnalysisContext context)
+    {
+        var type = context.SemanticModel.GetTypeInfo(expression, context.CancellationToken).Type;
+        return type is { TypeKind: not (TypeKind.Pointer or TypeKind.FunctionPointer or TypeKind.Error or TypeKind.Dynamic) } &&
+            context.SemanticModel.Compilation.ClassifyConversion(
+                type,
+                context.SemanticModel.Compilation.GetSpecialType(SpecialType.System_Object)).IsImplicit;
+    }
 
 
     private static bool IsMatchingNameOf(

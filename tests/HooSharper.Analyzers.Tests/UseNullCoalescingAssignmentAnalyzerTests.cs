@@ -1,8 +1,12 @@
 using HooSharper.CodeFixes;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CodeActions;
+using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.CSharp.Testing;
 using Microsoft.CodeAnalysis.Testing;
+using Microsoft.CodeAnalysis.Text;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
     HooSharper.Analyzers.UseNullCoalescingAssignmentAnalyzer,
     HooSharper.CodeFixes.UseNullCoalescingAssignmentCodeFixProvider>;
@@ -366,6 +370,13 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
                         value = fallback;
                     }
                 }
+                void SetNullable(int? value)
+                {
+                    if (!value.HasValue)
+                    {
+                        value = 1;
+                    }
+                }
             }
             """;
 
@@ -654,6 +665,260 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
             source,
             VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(0),
             fixedSource);
+    }
+
+    [Fact]
+    public Task PreservesBuiltInReferenceEqualityForTypesWithImplicitConversions()
+    {
+        const string source = """
+            #nullable enable
+            class Wrapper
+            {
+                public static implicit operator string?(Wrapper? value) => null;
+                public int Length => 1;
+                public void Call() { }
+            }
+            class Example
+            {
+                void M(Wrapper? value, Wrapper fallback)
+                {
+                    if (value {|#0:==|} null)
+                    {
+                        value = fallback;
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            #nullable enable
+            class Wrapper
+            {
+                public static implicit operator string?(Wrapper? value) => null;
+                public int Length => 1;
+                public void Call() { }
+            }
+            class Example
+            {
+                void M(Wrapper? value, Wrapper fallback)
+                {
+                    value ??= fallback;
+                }
+            }
+            """;
+
+        return VerifyCS.VerifyCodeFixAsync(
+            source,
+            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(0),
+            fixedSource);
+    }
+
+    [Fact]
+    public Task ReplacesStableNullableHasValueGuards()
+    {
+        const string source = """
+            class Example
+            {
+                int? field;
+                static int? shared;
+                readonly Example receiver;
+                Example() { receiver = this; }
+                void Run(int? parameter, char c)
+                {
+                    char? digit29 = null;
+                    if ({|#0:!|}digit29.HasValue) { digit29 = c; }
+                    if (({|#1:!|}((parameter).HasValue))) { parameter = 1; }
+                    if ({|#2:!|}this.field.HasValue) { this.field = 2; }
+                    if ({|#3:!|}shared.HasValue) { shared = 3; }
+                    if ({|#4:!|}receiver.field.HasValue) { receiver.field = 4; }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                int? field;
+                static int? shared;
+                readonly Example receiver;
+                Example() { receiver = this; }
+                void Run(int? parameter, char c)
+                {
+                    char? digit29 = null;
+                    digit29 ??= c;
+                    parameter ??= 1;
+                    this.field ??= 2;
+                    shared ??= 3;
+                    receiver.field ??= 4;
+                }
+            }
+            """;
+        var expected = Enumerable.Range(0, 5).Select(index =>
+            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(index));
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
+    [Fact]
+    public Task PreservesCommentsAroundNullableHasValueGuard()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(int? value)
+                {
+                    // fallback
+                    if (/* guard */ {|#0:!|}value.HasValue /* missing */)
+                    {
+                        // assignment
+                        value = 1; // retain
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                void Run(int? value)
+                {
+                    // fallback
+                    /* guard */
+                    /* missing */
+                    // assignment
+                    value ??= 1; // retain
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+    [Fact]
+    public Task IgnoresCustomHasValueAndUnstableNullableTargets()
+    {
+        const string source = """
+            class Custom { public bool HasValue => false; }
+            class Box { public int? Value; }
+            class Example
+            {
+                int? storage;
+                int? Property { get; set; }
+                ref int? Reference => ref storage;
+                Box receiver = new Box();
+                Box GetBox() => receiver;
+                void Run(Custom custom, int? value, int? other, Box first, Box second)
+                {
+                    if (!custom.HasValue) { custom = new Custom(); }
+                    if (!Property.HasValue) { Property = 1; }
+                    if (!Reference.HasValue) { Reference = 2; }
+                    if (!GetBox().Value.HasValue) { GetBox().Value = 3; }
+                    if (!receiver.Value.HasValue) { receiver.Value = 4; }
+                    if (!value.HasValue) { other = 5; }
+                    if (!first.Value.HasValue) { second.Value = 6; }
+                    if (value.HasValue == false) { value = 7; }
+                }
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task IgnoresNullableHasValueGuardWithInternalCommentsOrDirectives()
+    {
+        const string source = """
+            class Example
+            {
+                void Run(int? value)
+                {
+                    if (! /* reason */ value.HasValue) { value = 1; }
+                    if (!value.HasValue)
+                    {
+            #if DEBUG
+                        value = 2;
+            #else
+                        value = 3;
+            #endif
+                    }
+                }
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task FixAllCombinesNullableHasValueAndNullGuards()
+    {
+        const string source = """
+            class Example
+            {
+                int? Property { get; set; }
+                void Run(int? number, string? text)
+                {
+                    if ({|#0:!|}number.HasValue) { number = 7; }
+                    if (text {|#1:is|} null) { text = "fallback"; }
+                    if (!Property.HasValue) { Property = 8; }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                int? Property { get; set; }
+                void Run(int? number, string? text)
+                {
+                    number ??= 7;
+                    text ??= "fallback";
+                    if (!Property.HasValue) { Property = 8; }
+                }
+            }
+            """;
+        var expected = Enumerable.Range(0, 2).Select(index =>
+            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(index));
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
+    [Fact]
+    public Task IgnoresIncompleteNullableHasValueGuard()
+    {
+        var test = new CSharpCodeFixTest<UseNullCoalescingAssignmentAnalyzer,
+            UseNullCoalescingAssignmentCodeFixProvider, DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            CompilerDiagnostics = CompilerDiagnostics.None,
+            TestCode = "class Example { void Run(int? value) { if (!value.HasValue) { value = ; } } }",
+        };
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Theory]
+    [InlineData("class Example { void Run(int? value, int? other) { if (!value.HasValue) { other = 5; } } }", LanguageVersion.Latest)]
+    [InlineData("class Example { int? Value { get; set; } void Run() { if (!Value.HasValue) { Value = 5; } } }", LanguageVersion.Latest)]
+    [InlineData("class Box { public int? Value; } class Example { Box receiver = new Box(); void Run() { if (!receiver.Value.HasValue) { receiver.Value = 5; } } }", LanguageVersion.Latest)]
+    [InlineData("class Example { void Run(int? value) { if (!value.HasValue) { value = 5; } else { value = 6; } } }", LanguageVersion.Latest)]
+    [InlineData("class Example { void Run(int? value) { if (! /* preserve */ value.HasValue) { value = 5; } } }", LanguageVersion.Latest)]
+    [InlineData("class Example { void Run(int? value) { if (!value.HasValue) {\n#if DEBUG\nvalue = 5;\n#else\nvalue = 6;\n#endif\n} } }", LanguageVersion.Latest)]
+    [InlineData("class Example { void Run(int? value) { if (!value.HasValue) { value = 5; } } }", LanguageVersion.CSharp7_3)]
+    [InlineData("class Example { void Run(string value) { if (value == null) { value = \"fallback\"; } } }", LanguageVersion.CSharp7_3)]
+    public async Task StaleDiagnosticDoesNotOfferUnsafeNullAssignment(string source, LanguageVersion languageVersion)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var workspace = new AdhocWorkspace();
+        var project = workspace.AddProject("StaleNullAssignmentDiagnostic", LanguageNames.CSharp)
+            .WithParseOptions(new CSharpParseOptions(languageVersion))
+            .WithCompilationOptions(new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary))
+            .AddMetadataReference(MetadataReference.CreateFromFile(typeof(object).Assembly.Location));
+        var document = project.AddDocument("Test.cs", SourceText.From(source));
+        var compilation = await document.Project.GetCompilationAsync(cancellationToken);
+        Assert.DoesNotContain(compilation!.GetDiagnostics(cancellationToken), diagnostic =>
+            diagnostic.Severity == DiagnosticSeverity.Error);
+        var root = await document.GetSyntaxRootAsync(cancellationToken);
+        var ifStatement = root!.DescendantNodes().OfType<IfStatementSyntax>().Single();
+        var descriptor = new UseNullCoalescingAssignmentAnalyzer().SupportedDiagnostics.Single();
+        var diagnostic = Diagnostic.Create(descriptor, ifStatement.Condition.GetLocation());
+        var actions = new List<CodeAction>();
+        var context = new CodeFixContext(document, diagnostic,
+            (action, _) => actions.Add(action), cancellationToken);
+
+        await new UseNullCoalescingAssignmentCodeFixProvider().RegisterCodeFixesAsync(context);
+
+        Assert.Empty(actions);
     }
 
 }

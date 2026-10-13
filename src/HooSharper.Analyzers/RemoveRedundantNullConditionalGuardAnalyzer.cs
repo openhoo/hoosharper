@@ -97,11 +97,8 @@ public sealed class RemoveRedundantNullConditionalGuardAnalyzer : DiagnosticAnal
                 RawKind: (int)SyntaxKind.NotEqualsExpression,
                 OperatorToken: var operatorToken,
             } inequality &&
-            context.SemanticModel.GetOperation(inequality, context.CancellationToken) is IBinaryOperation
-            {
-                OperatorMethod: null,
-                Type.TypeKind: not TypeKind.Dynamic,
-            })
+            HooSharper.Internal.NullComparisonSafety.IsSafeBinary(
+                context.SemanticModel.GetOperation(inequality, context.CancellationToken)))
         {
             if (inequality.Left.IsKind(SyntaxKind.NullLiteralExpression))
             {
