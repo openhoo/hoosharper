@@ -9,11 +9,13 @@ CI to avoid downloading and re-inspecting third-party projects on every PR.
 """
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import tempfile
 
@@ -50,12 +52,15 @@ def capture(command, log, environment):
 def smoke(name, project, properties, work, args, environment, fixed=None):
     smoke = ROOT / "tools/HooSharper.SmokeTests/bin/Release/net10.0/HooSharper.SmokeTests.dll"
     hoo_report = work / f"{name}-hoosharper.json"
+    hoo_report.unlink(missing_ok=True)
     command = [args.dotnet, str(smoke), str(project), str(hoo_report), "--fix-all"]
     if name == "matrix":
         command += ["--require-all-rules", "--write-fixed", str(fixed)]
     for key, value in properties.items():
         command += ["--property", f"{key}={value}"]
     capture(command, work / f"{name}-smoke.log", environment)
+    if not hoo_report.is_file():
+        raise RuntimeError(f"Smoke command did not produce a fresh report: {hoo_report}")
     return json.loads(hoo_report.read_text())
 
 
@@ -63,6 +68,13 @@ def inspect(name, project, properties, work, args, environment, fixed=None):
     smoke(name, project, properties, work, args, environment, fixed)
     hoo_report = work / f"{name}-hoosharper.json"
     reference_report = work / f"{name}-resharper.xml"
+    reference_report.unlink(missing_ok=True)
+    (work / f"{name}-parity.json").unlink(missing_ok=True)
+    spec = importlib.util.spec_from_file_location("comparison", ROOT / "scripts/compare-resharper.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.capture_path(reference_report).unlink(missing_ok=True)
+    module.validate_hoo_inputs(json.loads(hoo_report.read_text()))
     command = [args.jb, "inspectcode", str(project), "--no-build", "--severity=HINT",
                "--format=Xml", f"--output={reference_report}", "--jobs=1", "--no-updates",
                "--no-buildin-settings", f"--dotnetcore={args.dotnet}"]
@@ -71,12 +83,82 @@ def inspect(name, project, properties, work, args, environment, fixed=None):
     if "TargetFramework" in properties:
         command += ["--target-framework=" + properties["TargetFramework"]]
     capture(command, work / f"{name}-resharper.log", environment)
-    spec = importlib.util.spec_from_file_location("comparison", ROOT / "scripts/compare-resharper.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    if not reference_report.is_file():
+        raise RuntimeError(f"Native inspection did not produce a fresh report: {reference_report}")
+    module.record_native_capture(hoo_report, reference_report)
     report = module.compare(hoo_report, reference_report)
     (work / f"{name}-parity.json").write_text(json.dumps(report, indent=2) + "\n")
     return report
+
+
+def validate_checkout_inputs(checkout, adaptations, commit="HEAD"):
+    """Accept only pristine inputs or exact, reproducible runner adaptations."""
+    # Read the pinned tree and actual bytes rather than trusting index flags such
+    # as assume-unchanged/skip-worktree, which hide edits from git diff/status.
+    tree = subprocess.check_output(
+        ["git", "-C", str(checkout), "ls-tree", "-r", "-z", commit], timeout=30)
+    algorithm = subprocess.check_output(
+        ["git", "-C", str(checkout), "rev-parse", "--show-object-format"], text=True, timeout=30).strip()
+    tracked = set()
+    for entry in tree.split(b"\0"):
+        if not entry:
+            continue
+        metadata, raw_name = entry.split(b"\t", 1)
+        mode, kind, expected = metadata.decode().split()
+        name = os.fsdecode(raw_name)
+        tracked.add(name)
+        path = checkout / name
+        if kind != "blob" or not path.exists() and not path.is_symlink():
+            raise RuntimeError(f"Missing or unsupported pinned input: {path}")
+        attributes = path.lstat()
+        if mode == "120000" and stat.S_ISLNK(attributes.st_mode):
+            content = os.fsencode(os.readlink(path))
+        elif mode in {"100644", "100755"} and stat.S_ISREG(attributes.st_mode):
+            executable = bool(attributes.st_mode & stat.S_IXUSR)
+            if executable != (mode == "100755"):
+                raise RuntimeError(f"Modified third-party input mode: {path}")
+            content = path.read_bytes()
+        else:
+            raise RuntimeError(f"Modified third-party input type: {path}")
+        digest = hashlib.new(algorithm, b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
+        if name not in adaptations and digest != expected:
+            # A committed eol=crlf attribute expands LF blobs on checkout. Honor
+            # that specific transformation without trusting index clean flags.
+            attribute = subprocess.check_output(
+                ["git", "-C", str(checkout), "check-attr", f"--source={commit}", "-z", "eol", "--", name],
+                timeout=30).split(b"\0")
+            normalized = content.replace(b"\r\n", b"\n")
+            normalized_digest = hashlib.new(
+                algorithm, b"blob " + str(len(normalized)).encode() + b"\0" + normalized).hexdigest()
+            if attribute[2] != b"crlf" or normalized_digest != expected:
+                raise RuntimeError(f"Modified third-party inputs in {checkout}: {name}")
+    # Include newly staged and ignored files too. Only conventional generated
+    # bin/obj trees are exempt; ignored source or build inputs still invalidate
+    # the pinned checkout.
+    actual_paths = subprocess.check_output(
+        ["git", "-C", str(checkout), "ls-files", "--cached", "--others", "-z"], timeout=30)
+    actual_paths = {os.fsdecode(name) for name in actual_paths.split(b"\0") if name}
+    extra = actual_paths - tracked - set(adaptations)
+    unexpected = sorted(name for name in extra if not {"bin", "obj"}.intersection(Path(name).parts))
+    if unexpected:
+        raise RuntimeError(f"Modified third-party inputs in {checkout}: {unexpected}")
+    for name, accepted in adaptations.items():
+        path = checkout / name
+        if path.is_symlink():
+            raise RuntimeError(f"Modified third-party adaptation input type: {path}")
+        actual = path.read_bytes() if path.is_file() else None
+        if actual not in accepted:
+            raise RuntimeError(f"Modified third-party adaptation input: {path}")
+
+
+def pinned_file(checkout, commit, relative, optional=False):
+    result = subprocess.run(["git", "-C", str(checkout), "show", f"{commit}:{relative}"],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=False)
+    if result.returncode:
+        if optional:
+            return None
+        raise RuntimeError(f"Missing pinned input: {relative}")
+    return result.stdout
 
 
 def prepare_project(item, work, environment):
@@ -95,21 +177,20 @@ def prepare_project(item, work, environment):
         capture(["git", "-C", str(checkout), "fetch", "--unshallow", "origin"],
                 work / "dapper-history.log", environment)
     project = checkout / relative
-    # Refuse to silently qualify modified third-party library sources.
-    changed = subprocess.check_output(["git", "-C", str(checkout), "diff", "--name-only", "HEAD", "--", "*.cs"], text=True)
-    untracked = subprocess.check_output(["git", "-C", str(checkout), "ls-files", "--others",
-                                         "--exclude-standard", "--", "*.cs"], text=True, timeout=30)
-    if changed.strip() or untracked.strip():
-        raise RuntimeError(f"Modified third-party C# source in {checkout}: {changed}{untracked}")
     policy = checkout / sdk_file
     backup = work / f"{name}-original-sdk.json"
-    backup.write_bytes(subprocess.check_output(
-        ["git", "-C", str(checkout), "show", f"{commit}:{sdk_file}"], timeout=30))
-    policy.write_text((ROOT / "global.json").read_text())
     config = project.parent / ".editorconfig"
+    config_name = config.relative_to(checkout).as_posix()
     marker = "# HooSharper ReSharper smoke comparison\n"
-    original = config.read_text() if config.exists() else ""
-    config.write_text(original.split(marker)[0].rstrip() + "\n\n" + marker + SETTINGS)
+    original_sdk = pinned_file(checkout, commit, sdk_file)
+    original_config = pinned_file(checkout, commit, config_name, optional=True)
+    adapted_sdk = (ROOT / "global.json").read_bytes()
+    adapted_config = ((original_config or b"").decode("utf-8").rstrip() + "\n\n" + marker + SETTINGS).encode("utf-8")
+    validate_checkout_inputs(checkout, {sdk_file: (original_sdk, adapted_sdk),
+                                        config_name: (original_config, adapted_config)}, commit)
+    backup.write_bytes(original_sdk)
+    policy.write_bytes(adapted_sdk)
+    config.write_bytes(adapted_config)
     properties = dict(properties, Configuration="Release", TreatWarningsAsErrors="false")
     command = [environment["HOOSHARPER_SMOKE_DOTNET"], "build", str(project), "-c", "Release", "-m:1"]
     command += [f"-p:{key}={value}" for key, value in properties.items()]

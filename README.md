@@ -541,7 +541,11 @@ This runs the matrix and pinned Dapper 2.1.66, Newtonsoft.Json 13.0.3, and Seril
 4.0.0 projects against their selected modern target and .NET Standard 2.0.
 Reports retain source/configuration/reference and assembly hashes,
 raw native findings, mapped inspection opportunities, and unmatched findings for
-source review. Seventeen rules have mapped native InspectCode inspections;
+source review. Native XML reports have paired capture manifests; comparison
+rejects changed sources/configuration, mismatched reports, and missing fresh
+outputs. Reused checkouts are checked against pinned Git blobs and file modes,
+including hidden edits, staged additions, and ignored inputs outside generated
+`bin`/`obj` directories. Seventeen rules have mapped native InspectCode inspections;
 HOO1010, HOO1016, and HOO1020 have no matching inspection in this catalog.
 ReSharper's own Roslyn analyzer findings are excluded from native counts.
 Different rule scope, enabled settings, and diagnostic spans require review;

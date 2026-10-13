@@ -24,6 +24,8 @@ def main():
     dotnet = str(Path(args.dotnet).resolve())
     work = args.work_dir.resolve()
     work.mkdir(parents=True, exist_ok=True)
+    (work / "matrix-hoosharper.json").unlink(missing_ok=True)
+    (work / "matrix-runtime.json").unlink(missing_ok=True)
     environment = dict(os.environ, DOTNET_PROCESSOR_COUNT="2", DOTNET_ROOT=str(Path(dotnet).parent),
                        PATH=str(Path(dotnet).parent) + os.pathsep + os.environ["PATH"])
     tool = ROOT / "tools/HooSharper.SmokeTests/HooSharper.SmokeTests.csproj"
