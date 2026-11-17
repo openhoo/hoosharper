@@ -47,6 +47,7 @@ public sealed class RemoveRedundantNullConditionalGuardAnalyzer : DiagnosticAnal
             {
                 Expression: ConditionalAccessExpressionSyntax conditionalAccess,
             } ||
+            HooSharper.Internal.ControlFlowScopeSafety.HasExpandedScopeCollision(block, block.Statements[0]) ||
             HasDirective(ifStatement) ||
             HasComment(ifStatement.Condition) ||
             !TryGetNonNullCheckedReceiver(ifStatement.Condition, context, out var checkedReceiver, out var location) ||

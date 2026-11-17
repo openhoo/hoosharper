@@ -88,7 +88,7 @@ public sealed class UseNullCoalescingAssignmentCodeFixProvider : CodeFixProvider
                 SyntaxFactory.AssignmentExpression(
                     SyntaxKind.CoalesceAssignmentExpression,
                     assignment.Left,
-                    SyntaxFactory.Token(SyntaxKind.QuestionQuestionEqualsToken),
+                    SyntaxFactory.Token(SyntaxKind.QuestionQuestionEqualsToken).WithTriviaFrom(assignment.OperatorToken),
                     assignment.Right))
             .WithLeadingTrivia(leadingTrivia)
             .WithTrailingTrivia(trailingTrivia)

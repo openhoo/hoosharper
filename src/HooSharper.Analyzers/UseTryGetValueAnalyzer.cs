@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -50,17 +51,34 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
         INamedTypeSymbol? dictionaryInterface)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
-        if (context.SemanticModel.SyntaxTree.Options is CSharpParseOptions
+        if (TryGetMatchingAccesses(ifStatement, context.SemanticModel, context.CancellationToken,
+                dictionaryDefinition, dictionaryInterface))
+        {
+            var invocation = (InvocationExpressionSyntax)ifStatement.Condition;
+            var member = (MemberAccessExpressionSyntax)invocation.Expression;
+            context.ReportDiagnostic(Diagnostic.Create(Rule, member.Name.GetLocation()));
+        }
+    }
+
+    internal static bool TryGetMatchingAccesses(
+        IfStatementSyntax ifStatement,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken,
+        INamedTypeSymbol? dictionaryDefinition,
+        INamedTypeSymbol? dictionaryInterface,
+        List<ElementAccessExpressionSyntax>? matches = null)
+    {
+        if (semanticModel.SyntaxTree.Options is CSharpParseOptions
             {
                 LanguageVersion: var languageVersion,
             } &&
             languageVersion != LanguageVersion.Default &&
             (int)languageVersion < (int)LanguageVersion.CSharp7)
         {
-            return;
+            return false;
         }
 
-        if (ifStatement.Else is not null || HasDirective(ifStatement) ||
+        if (ifStatement.ContainsDiagnostics || ifStatement.Else is not null || HasDirective(ifStatement) ||
             ifStatement.Condition is not InvocationExpressionSyntax
             {
                 Expression: MemberAccessExpressionSyntax
@@ -71,12 +89,12 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
             } invocation ||
             invocation.ArgumentList.Arguments.Count != 1)
         {
-            return;
+            return false;
         }
 
         var key = invocation.ArgumentList.Arguments[0].Expression;
-        var dictionaryOperation = context.SemanticModel.GetOperation(memberAccess.Expression, context.CancellationToken);
-        var invocationOperation = context.SemanticModel.GetOperation(invocation, context.CancellationToken) as IInvocationOperation;
+        var dictionaryOperation = semanticModel.GetOperation(memberAccess.Expression, cancellationToken);
+        var invocationOperation = semanticModel.GetOperation(invocation, cancellationToken) as IInvocationOperation;
         var keyOperation = invocationOperation?.Arguments.Length == 1
             ? invocationOperation.Arguments[0].Value
             : null;
@@ -84,8 +102,8 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
             !IsCallbackStableOperation(keyOperation) ||
             !HasProvenDefaultComparer(
                 dictionaryOperation,
-                context.SemanticModel,
-                context.CancellationToken,
+                semanticModel,
+                cancellationToken,
                 dictionaryDefinition) ||
             dictionaryOperation?.Type is not INamedTypeSymbol namedType ||
             (!SymbolEqualityComparer.Default.Equals(namedType.OriginalDefinition, dictionaryDefinition) &&
@@ -96,18 +114,19 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
                 dictionaryDefinition,
                 dictionaryInterface))
         {
-            return;
+            return false;
         }
 
-        if (MayMutateLookup(
+        if (semanticModel.LookupNamespacesAndTypes(ifStatement.SpanStart, name: "var").Length != 0 ||
+            MayMutateLookup(
                 ifStatement.Statement,
                 memberAccess.Expression,
                 key,
-                context.SemanticModel,
+                semanticModel,
                 keyOperation,
-                context.CancellationToken))
+                cancellationToken))
         {
-            return;
+            return false;
         }
 
         foreach (var node in ifStatement.Statement.DescendantNodes(ShouldDescendInto))
@@ -124,7 +143,7 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            var elementOperation = Unwrap(context.SemanticModel.GetOperation(elementAccess, context.CancellationToken));
+            var elementOperation = Unwrap(semanticModel.GetOperation(elementAccess, cancellationToken));
             if (elementOperation is not IPropertyReferenceOperation indexerOperation ||
                 !IsDictionaryMember(
                     indexerOperation.Property.OriginalDefinition.ContainingType,
@@ -135,11 +154,17 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            context.ReportDiagnostic(Diagnostic.Create(Rule, memberAccess.Name.GetLocation()));
-            return;
+            if (matches is null)
+            {
+                return true;
+            }
+
+            matches.Add(elementAccess);
         }
 
+        return matches is { Count: > 0 };
     }
+
     private static bool HasProvenDefaultComparer(
         IOperation? operation,
         SemanticModel semanticModel,
@@ -452,10 +477,19 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
-        if (operation is IPropertyReferenceOperation property &&
-            !(property.Syntax is ElementAccessExpressionSyntax { ArgumentList.Arguments.Count: 1 } access &&
-              IsSameExpression(access.Expression, dictionary) &&
-              IsSameExpression(access.ArgumentList.Arguments[0].Expression, key)))
+        if (operation is IPropertyReferenceOperation property)
+        {
+            // The condition already evaluated this exact receiver and key.
+            // Shadowed indexers are checked separately by MayMutateLookup.
+            return !(property.Syntax is ElementAccessExpressionSyntax { ArgumentList.Arguments.Count: 1 } access &&
+                IsSameExpression(access.Expression, dictionary) &&
+                IsSameExpression(access.ArgumentList.Arguments[0].Expression, key));
+        }
+
+        // Reading unrelated static storage can run a type initializer before
+        // the original indexer, and that initializer can mutate the dictionary.
+        if (operation is IFieldReferenceOperation { Field: { IsStatic: true, IsConst: false } field } &&
+            field.ContainingType.StaticConstructors.Length > 0)
         {
             return true;
         }

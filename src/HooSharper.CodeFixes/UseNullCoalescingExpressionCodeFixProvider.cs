@@ -26,7 +26,7 @@ public sealed class UseNullCoalescingExpressionCodeFixProvider : CodeFixProvider
         var diagnostic = context.Diagnostics[0];
         var conditional = root?.FindToken(diagnostic.Location.SourceSpan.Start).Parent?
             .AncestorsAndSelf().OfType<ConditionalExpressionSyntax>().FirstOrDefault();
-        if (conditional is null || !TryGetParts(conditional, out _, out _))
+        if (conditional is null)
         {
             return;
         }
@@ -46,20 +46,16 @@ public sealed class UseNullCoalescingExpressionCodeFixProvider : CodeFixProvider
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
         var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
-        if (semanticModel is null ||
-            !HooSharper.Internal.NullComparisonSafety.IsSafeNullCheck(
-                conditional.Condition, semanticModel, cancellationToken))
-        {
-            return document;
-        }
-        if (root is null || !TryGetParts(conditional, out var target, out var fallback))
+        if (root is null || semanticModel is null ||
+            !UseNullCoalescingExpressionAnalyzer.TryGetReplacementOperands(
+                conditional, semanticModel, cancellationToken, out var target, out var fallback))
         {
             return document;
         }
 
         var comments = conditional.DescendantTrivia(descendIntoTrivia: true)
             .Where(trivia =>
-                IsComment(trivia) &&
+                CodeFixTrivia.IsComment(trivia) &&
                 !target.FullSpan.Contains(trivia.Span) &&
                 !fallback.Span.Contains(trivia.Span))
             .ToArray();
@@ -104,65 +100,4 @@ public sealed class UseNullCoalescingExpressionCodeFixProvider : CodeFixProvider
             ConditionalExpressionSyntax or
             SwitchExpressionSyntax or
             QueryExpressionSyntax;
-
-    private static bool TryGetParts(
-        ConditionalExpressionSyntax conditional,
-        out ExpressionSyntax target,
-        out ExpressionSyntax fallback)
-    {
-        var condition = WalkDownParentheses(conditional.Condition);
-        if (condition is IsPatternExpressionSyntax isPattern)
-        {
-            if (isPattern.Pattern is ConstantPatternSyntax
-                {
-                    Expression.RawKind: (int)SyntaxKind.NullLiteralExpression,
-                })
-            {
-                target = isPattern.Expression;
-                fallback = conditional.WhenTrue;
-                return true;
-            }
-
-            if (isPattern.Pattern is UnaryPatternSyntax
-                {
-                    RawKind: (int)SyntaxKind.NotPattern,
-                    Pattern: ConstantPatternSyntax
-                    {
-                        Expression.RawKind: (int)SyntaxKind.NullLiteralExpression,
-                    },
-                })
-            {
-                target = isPattern.Expression;
-                fallback = conditional.WhenFalse;
-                return true;
-            }
-        }
-
-        if (condition is BinaryExpressionSyntax binary &&
-            (binary.IsKind(SyntaxKind.EqualsExpression) || binary.IsKind(SyntaxKind.NotEqualsExpression)))
-        {
-            target = binary.Left.IsKind(SyntaxKind.NullLiteralExpression) ? binary.Right : binary.Left;
-            var nullWhenTrue = binary.IsKind(SyntaxKind.EqualsExpression);
-            fallback = nullWhenTrue ? conditional.WhenTrue : conditional.WhenFalse;
-            return true;
-        }
-
-        target = null!;
-        fallback = null!;
-        return false;
-    }
-
-    private static bool IsComment(SyntaxTrivia trivia) =>
-        trivia.IsKind(SyntaxKind.SingleLineCommentTrivia) ||
-        trivia.IsKind(SyntaxKind.MultiLineCommentTrivia);
-
-    private static ExpressionSyntax WalkDownParentheses(ExpressionSyntax expression)
-    {
-        while (expression is ParenthesizedExpressionSyntax parenthesized)
-        {
-            expression = parenthesized.Expression;
-        }
-
-        return expression;
-    }
 }

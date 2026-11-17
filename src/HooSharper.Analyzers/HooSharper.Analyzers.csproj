@@ -50,6 +50,7 @@
   </Target>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="HooSharper.CodeFixes" />
     <Compile Include="../Shared/ControlFlowScopeSafety.cs" Link="ControlFlowScopeSafety.cs" />
     <Compile Include="../Shared/NullComparisonSafety.cs" Link="NullComparisonSafety.cs" />
   </ItemGroup>

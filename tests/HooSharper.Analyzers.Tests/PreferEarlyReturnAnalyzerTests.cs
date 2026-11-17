@@ -973,4 +973,17 @@ public sealed class PreferEarlyReturnAnalyzerTests
             VerifyCS.Diagnostic(PreferEarlyReturnAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
     }
 
+    [Fact]
+    public Task KeepsScopeOfAnUnusedQueryRangeVariable() =>
+        VerifyCS.VerifyAnalyzerAsync("""
+            using System.Linq;
+            class C
+            {
+                void Run(bool flag)
+                {
+                    var q = from later in new[] { 1 } select 1;
+                    if (flag) { int later = 42; System.Console.Write(later); }
+                }
+            }
+            """);
 }

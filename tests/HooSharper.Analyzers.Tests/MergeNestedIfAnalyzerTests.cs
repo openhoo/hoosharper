@@ -1036,4 +1036,49 @@ public sealed class MergeNestedIfAnalyzerTests
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
 
+    [Fact]
+    public Task KeepsScopeOfAnUnusedQueryRangeVariable() =>
+        VerifyCS.VerifyAnalyzerAsync("""
+            using System.Linq;
+            class C
+            {
+                int Run(object o)
+                {
+                    var q = from item in new[] { 1 } group item by item into later select 1;
+                    if (o != null) { if (o is int later) return later; }
+                    return 0;
+                }
+            }
+            """);
+
+    [Fact]
+    public Task PreservesTrailingCommentsOnBothRemovedAndRetainedStatements()
+    {
+        const string source = """
+            class C
+            {
+                void Run(bool a, bool b)
+                {
+                    {|#0:if|} (a)
+                    {
+                        if (b)
+                            System.Console.Write(1); // inner
+                    } // outer
+                }
+            }
+            """;
+        const string fixedSource = """
+            class C
+            {
+                void Run(bool a, bool b)
+                {
+                    if (a && b)
+                        System.Console.Write(1); // inner
+                                                 // outer
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(MergeNestedIfAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
 }

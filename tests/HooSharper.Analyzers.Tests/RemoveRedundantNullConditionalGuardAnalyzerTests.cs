@@ -711,4 +711,18 @@ public sealed class RemoveRedundantNullConditionalGuardAnalyzerTests
             fixedSource);
     }
 
+    [Fact]
+    public Task KeepsNullGuardWhenOutVariableWouldShadowAMember() =>
+        VerifyCS.VerifyAnalyzerAsync("""
+            class C
+            {
+                int value = 42;
+                void Get(out int n) => n = 7;
+                int Run(C? other)
+                {
+                    if (other is not null) { other?.Get(out var value); }
+                    return value;
+                }
+            }
+            """);
 }

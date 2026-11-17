@@ -372,7 +372,16 @@ shadowed symbols and changes to any part of the receiver or key reference chain.
 stable local, parameter, or field. `HOO1019` accepts simple declaration patterns
 under logical negation while preserving the variable's definite assignment.
 Redundant-else removal uses semantic control flow to recognize branches whose
-nested `if` or `try` statements cannot fall through.
+nested `if` or `try` statements cannot fall through. It keeps a block around an
+embedded `else` statement when moving its variables would change their scope.
+Brace removal also checks whether an enclosing `else` still needs the braces.
+
+The null-assignment rule skips ref reassignments and nullable assignments where
+`??=` would change the value of `default` or select a different conversion.
+For example, assigning `default` to an `int?` sets it to null, while
+`n ??= default` can set it to zero. Null guards keep their original variable
+scope, and `ThrowIfNull` stays bound to the framework method even if a local
+has the same name as the exception type.
 
 #### Fluent-chain line length
 
@@ -526,7 +535,8 @@ The executable matrix covers all 20 diagnostics, independent project Fix All,
 cumulative Fix All until no diagnostics remain, compiler validity, nullable
 warning counts, comment preservation, and before/after runtime output. It also
 contains executable negative controls for unsafe transformations. The smoke tool
-loads real MSBuild projects and compares sequential and concurrent diagnostics.
+loads real MSBuild projects, compares sequential and concurrent diagnostics, and
+reparses the emitted C# after each Fix All before checking it with the compiler.
 Fixed exports use fresh directories and a checked source hash manifest.
 
 For the extended native comparison, install JetBrains.ReSharper.GlobalTools
@@ -551,7 +561,8 @@ ReSharper's own Roslyn analyzer findings are excluded from native counts.
 Different rule scope, enabled settings, and diagnostic spans require review;
 matching counts do not establish semantic parity. This test does not exercise
 interactive Rider/ReSharper quick-fix UI behavior. The extended corpus is run
-separately from ordinary CI. See [the review report](docs/reviews/2026-10-13-review.md).
+separately from ordinary CI. See the [native comparison](docs/reviews/2026-10-13-review.md)
+and the [code-fix safety review](docs/reviews/2026-11-17-review.md).
 
 ### Performance benchmarks
 

@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -31,7 +30,7 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
 
         if (ifStatement?.Statement is not BlockSyntax body ||
             ifStatement.Parent is not BlockSyntax parentBlock ||
-            HasScopeCollision(ifStatement, parentBlock, body))
+            PreferEarlyReturnAnalyzer.HasScopeCollision(ifStatement, parentBlock, body))
         {
             return;
         }
@@ -58,7 +57,7 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
             ifStatement.Statement is not BlockSyntax body ||
             ifStatement.Parent is not BlockSyntax parentBlock ||
             ifStatement.ContainsDirectives ||
-            HasScopeCollision(ifStatement, parentBlock, body) ||
+            PreferEarlyReturnAnalyzer.HasScopeCollision(ifStatement, parentBlock, body) ||
             HooSharper.Internal.ControlFlowScopeSafety.HoistingBodyCrossesUsingDeclaration(
                 body, parentBlock, semanticModel, cancellationToken))
         {
@@ -91,120 +90,6 @@ public sealed class PreferEarlyReturnCodeFixProvider : CodeFixProvider
 
         return document.WithSyntaxRoot(root.ReplaceNode(parentBlock, newParentBlock));
     }
-
-    private static bool HasScopeCollision(
-        IfStatementSyntax ifStatement,
-        BlockSyntax parentBlock,
-        BlockSyntax body)
-    {
-        var movedNames = new HashSet<string>(StringComparer.Ordinal);
-        var movedLabels = new HashSet<string>(StringComparer.Ordinal);
-
-        foreach (var statement in body.Statements)
-        {
-            switch (statement)
-            {
-                case LocalDeclarationStatementSyntax declaration:
-                    foreach (var variable in declaration.Declaration.Variables)
-                    {
-                        movedNames.Add(variable.Identifier.ValueText);
-                    }
-
-                    break;
-                case LocalFunctionStatementSyntax localFunction:
-                    movedNames.Add(localFunction.Identifier.ValueText);
-                    break;
-                case LabeledStatementSyntax labeledStatement:
-                    movedLabels.Add(labeledStatement.Identifier.ValueText);
-                    break;
-            }
-
-            foreach (var node in statement.DescendantNodes(ShouldDescendInto))
-            {
-                if (node is LabeledStatementSyntax label && IsDirectlyContainedBy(label, body))
-                {
-                    movedLabels.Add(label.Identifier.ValueText);
-                }
-
-                if (node is SingleVariableDesignationSyntax designation && IsDirectlyContainedBy(designation, body))
-                {
-                    movedNames.Add(designation.Identifier.ValueText);
-                }
-            }
-        }
-
-        if (movedNames.Count == 0 && movedLabels.Count == 0)
-        {
-            return false;
-        }
-
-        if (ifStatement.Condition.DescendantTokens().Any(token =>
-            token.IsKind(SyntaxKind.IdentifierToken) && movedNames.Contains(token.ValueText)))
-        {
-            return true;
-        }
-
-        foreach (var statement in parentBlock.Statements)
-        {
-            if (statement == ifStatement)
-            {
-                continue;
-            }
-
-            // Deferred bodies still bind names in their enclosing declaration scope.
-            if (statement.DescendantNodesAndSelf().Any(node =>
-                node is IdentifierNameSyntax identifier && movedNames.Contains(identifier.Identifier.ValueText) ||
-                node is GenericNameSyntax generic && movedNames.Contains(generic.Identifier.ValueText)))
-            {
-                return true;
-            }
-
-            foreach (var node in statement.DescendantNodesAndSelf(ShouldDescendInto))
-            {
-                var name = node switch
-                {
-                    VariableDeclaratorSyntax variable => variable.Identifier.ValueText,
-                    SingleVariableDesignationSyntax designation => designation.Identifier.ValueText,
-                    ForEachStatementSyntax forEachStatement => forEachStatement.Identifier.ValueText,
-                    CatchDeclarationSyntax catchDeclaration => catchDeclaration.Identifier.ValueText,
-                    LocalFunctionStatementSyntax localFunction => localFunction.Identifier.ValueText,
-                    _ => null,
-                };
-
-                if (node is IdentifierNameSyntax identifier && movedNames.Contains(identifier.Identifier.ValueText) ||
-                    node is GenericNameSyntax generic && movedNames.Contains(generic.Identifier.ValueText) ||
-                    name is not null && movedNames.Contains(name))
-                {
-                    return true;
-                }
-
-                if (node is LabeledStatementSyntax label && movedLabels.Contains(label.Identifier.ValueText))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private static bool IsDirectlyContainedBy(SyntaxNode node, BlockSyntax body)
-    {
-        for (var current = node.Parent; current is not null; current = current.Parent)
-        {
-            if (current is BlockSyntax containingBlock)
-            {
-                return containingBlock == body;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool ShouldDescendInto(SyntaxNode node) =>
-        node is not AnonymousFunctionExpressionSyntax and
-        not LocalFunctionStatementSyntax and
-        not TypeDeclarationSyntax;
 
     private static void PreserveSignificantTrivia(
         BlockSyntax body,

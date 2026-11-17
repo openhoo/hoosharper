@@ -72,15 +72,40 @@ public sealed class UseThrowIfNullCodeFixProvider : CodeFixProvider
                     SyntaxFactory.Argument(arguments[0].Expression.WithoutTrivia()),
                 ])));
 
+        // A constructor name is bound as a type, but the receiver of a method
+        // call may instead bind to a local or field with the same name.
+        var expectedType = semanticModel.Compilation.GetTypeByMetadataName("System.ArgumentNullException");
+        bool CallsFrameworkGuard(InvocationExpressionSyntax call) =>
+            semanticModel.GetSpeculativeSymbolInfo(ifStatement.SpanStart,
+                SyntaxFactory.ParseExpression(call.ToString()), SpeculativeBindingOption.BindAsExpression).Symbol
+                is IMethodSymbol { IsStatic: true, Parameters.Length: 2 } method &&
+            method.Parameters[0].Type.SpecialType == SpecialType.System_Object &&
+            SymbolEqualityComparer.Default.Equals(method.ContainingType, expectedType);
+
+        var qualify = !CallsFrameworkGuard(invocation);
+        if (qualify)
+        {
+            var member = (MemberAccessExpressionSyntax)invocation.Expression;
+            invocation = invocation.WithExpression(member.WithExpression(
+                SyntaxFactory.ParseExpression("global::System.ArgumentNullException").WithTriviaFrom(typeExpression)));
+            if (!CallsFrameworkGuard(invocation))
+            {
+                return document;
+            }
+        }
+
         var replacement = SyntaxFactory.ExpressionStatement(invocation)
             .WithLeadingTrivia(ifStatement.GetLeadingTrivia())
-            .WithTrailingTrivia(GetTrailingTrivia(ifStatement, throwStatement))
+            .WithTrailingTrivia(CodeFixTrivia.TrailingAfterUnwrapping(throwStatement, ifStatement))
             .WithAdditionalAnnotations(Formatter.Annotation);
 
         var comments = ifStatement.DescendantTrivia(descendIntoTrivia: true)
             .Where(trivia => trivia.SpanStart >= ifStatement.SpanStart &&
                              trivia.Span.End <= ifStatement.Span.End &&
-                             !creation.Type.FullSpan.Contains(trivia.Span) &&
+                             (!creation.Type.FullSpan.Contains(trivia.Span) ||
+                              qualify && creation.Type.Span.Contains(trivia.Span)) &&
+                             !checkedExpression.Span.Contains(trivia.Span) &&
+                             !arguments[0].Expression.Span.Contains(trivia.Span) &&
                              !throwStatement.SemicolonToken.FullSpan.Contains(trivia.Span) &&
                              (trivia.IsKind(SyntaxKind.SingleLineCommentTrivia) ||
                               trivia.IsKind(SyntaxKind.MultiLineCommentTrivia)))
@@ -100,17 +125,6 @@ public sealed class UseThrowIfNullCodeFixProvider : CodeFixProvider
         }
 
         return document.WithSyntaxRoot(root.ReplaceNode(ifStatement, replacement));
-    }
-
-    private static SyntaxTriviaList GetTrailingTrivia(
-        IfStatementSyntax ifStatement,
-        ThrowStatementSyntax throwStatement)
-    {
-        var trailing = throwStatement.SemicolonToken.TrailingTrivia;
-        return trailing.Any(static trivia => trivia.IsKind(SyntaxKind.SingleLineCommentTrivia) ||
-                                             trivia.IsKind(SyntaxKind.MultiLineCommentTrivia))
-            ? trailing
-            : ifStatement.GetTrailingTrivia();
     }
 
     private static bool TryGetParts(

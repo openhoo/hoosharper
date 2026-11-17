@@ -65,7 +65,7 @@ public sealed class MergeNestedIfAnalyzer : DiagnosticAnalyzer
         statement.Parent is BlockSyntax { Statements.Count: 1 } block &&
         block.Parent is IfStatementSyntax { Else: null };
 
-    private static bool IntroducesDeclarationCollision(IfStatementSyntax outerIf)
+    internal static bool IntroducesDeclarationCollision(IfStatementSyntax outerIf)
     {
         var introducedNames = new HashSet<string>();
         var current = outerIf;
@@ -119,15 +119,7 @@ public sealed class MergeNestedIfAnalyzer : DiagnosticAnalyzer
 
                 foreach (var node in containingBlock.Statements[statementIndex].DescendantNodesAndSelf())
                 {
-                    var name = node switch
-                    {
-                        VariableDeclaratorSyntax declaration => declaration.Identifier.ValueText,
-                        SingleVariableDesignationSyntax designation => designation.Identifier.ValueText,
-                        ForEachStatementSyntax forEachStatement => forEachStatement.Identifier.ValueText,
-                        CatchDeclarationSyntax catchDeclaration => catchDeclaration.Identifier.ValueText,
-                        LocalFunctionStatementSyntax localFunction => localFunction.Identifier.ValueText,
-                        _ => null,
-                    };
+                    var name = HooSharper.Internal.ControlFlowScopeSafety.DeclaredName(node);
 
                     if (node is IdentifierNameSyntax identifier && introducedNames.Contains(identifier.Identifier.ValueText) ||
                         node is GenericNameSyntax generic && introducedNames.Contains(generic.Identifier.ValueText) ||
@@ -156,15 +148,7 @@ public sealed class MergeNestedIfAnalyzer : DiagnosticAnalyzer
                     continue;
                 }
 
-                var name = node switch
-                {
-                    VariableDeclaratorSyntax declaration => declaration.Identifier.ValueText,
-                    SingleVariableDesignationSyntax designation => designation.Identifier.ValueText,
-                    ForEachStatementSyntax forEachStatement => forEachStatement.Identifier.ValueText,
-                    CatchDeclarationSyntax catchDeclaration => catchDeclaration.Identifier.ValueText,
-                    LocalFunctionStatementSyntax localFunction => localFunction.Identifier.ValueText,
-                    _ => null,
-                };
+                var name = HooSharper.Internal.ControlFlowScopeSafety.DeclaredName(node);
 
                 if (node is IdentifierNameSyntax identifier && introducedNames.Contains(identifier.Identifier.ValueText) ||
                     node is GenericNameSyntax generic && introducedNames.Contains(generic.Identifier.ValueText) ||

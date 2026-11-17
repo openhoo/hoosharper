@@ -557,4 +557,79 @@ public sealed class UseTypePatternAnalyzerTests
             fixedSource);
     }
 
+    [Fact]
+    public Task KeepsLocalConvertedByAnAliasNamedVar() =>
+        VerifyCS.VerifyAnalyzerAsync("""
+            using var = Wrapper;
+            class Wrapper
+            {
+                public static implicit operator Wrapper(string? s) => new Wrapper();
+            }
+            class C
+            {
+                int Pick(Wrapper w) => 1;
+                int Pick(string s) => 2;
+                int Aliased(object o)
+                {
+                    var value = o as string;
+                    if (value is not null) return Pick(value);
+                    return 0;
+                }
+            }
+            """);
+
+    [Fact]
+    public Task KeepsAsConversionWithUntypedNullInput() =>
+        VerifyCS.VerifyAnalyzerAsync("""
+            class C
+            {
+                int Run()
+                {
+                    var value = null as string;
+                    if (value is not null) return value.Length;
+                    return 0;
+                }
+            }
+            """);
+
+    [Theory]
+    [InlineData(LanguageVersion.CSharp7, false)]
+    [InlineData(LanguageVersion.CSharp7_1, true)]
+    public Task ChecksGenericPatternCompatibilityForTheActualLanguageVersion(LanguageVersion version, bool canRewrite)
+    {
+        const string source = """
+            class C
+            {
+                int Run<T>(T input)
+                {
+                    var text = input as string;
+                    if (text != null) return text.Length;
+                    return 0;
+                }
+            }
+            """;
+        var test = new CSharpCodeFixTest<UseTypePatternAnalyzer, UseTypePatternCodeFixProvider, DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = canRewrite ? source.Replace(" as ", " {|#0:as|} ") : source,
+        };
+        if (canRewrite)
+        {
+            test.ExpectedDiagnostics.Add(VerifyCS.Diagnostic(UseTypePatternAnalyzer.DiagnosticId).WithLocation(0));
+            test.FixedCode = """
+                class C
+                {
+                    int Run<T>(T input)
+                    {
+                        if (input is string text) return text.Length;
+                        return 0;
+                    }
+                }
+                """;
+        }
+
+        test.SolutionTransforms.Add((solution, id) => solution.WithProjectParseOptions(id,
+            ((CSharpParseOptions)solution.GetProject(id)!.ParseOptions!).WithLanguageVersion(version)));
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
 }

@@ -603,4 +603,62 @@ public sealed class OmitBracesForSingleLineIfAnalyzerTests
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
 
+    [Fact]
+    public Task KeepsNestedElseBlockThatProtectsAnEnclosingElse() =>
+        VerifyCS.VerifyAnalyzerAsync("""
+            class C
+            {
+                int Run(bool a, bool b, bool c)
+                {
+                    if (a)
+                        if (b) return 1;
+                        else { if (c) return 2; }
+                    else return 3;
+                    return 0;
+                }
+            }
+            """);
+
+    [Fact]
+    public Task FixAllKeepsOneBlockBetweenNestedUnmatchedIfAndOuterElse()
+    {
+        const string source = """
+            class C
+            {
+                int Run(bool a, bool b, bool c)
+                {
+                    if (a)
+                    {
+                        if (b)
+                            return 1;
+                        else
+                        {|#0:{|}
+                            if (c) return 2;
+                        }
+                    }
+                    else return 3;
+                    return 0;
+                }
+            }
+            """;
+        const string fixedSource = """
+            class C
+            {
+                int Run(bool a, bool b, bool c)
+                {
+                    if (a)
+                    {
+                        if (b)
+                            return 1;
+                        else
+                            if (c) return 2;
+                    }
+                    else return 3;
+                    return 0;
+                }
+            }
+            """;
+        var expected = VerifyCS.Diagnostic(OmitBracesForSingleLineIfAnalyzer.DiagnosticId).WithLocation(0);
+        return VerifyCS.VerifyCodeFixAsync(source, new[] { expected }, fixedSource, fixedSource);
+    }
 }

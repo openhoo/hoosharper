@@ -32,52 +32,63 @@ public sealed class UseNullCoalescingExpressionAnalyzer : DiagnosticAnalyzer
 
     private static void AnalyzeConditionalExpression(SyntaxNodeAnalysisContext context)
     {
-        if (context.Node.SyntaxTree.Options is not CSharpParseOptions parseOptions ||
+        var conditional = (ConditionalExpressionSyntax)context.Node;
+        if (TryGetReplacementOperands(conditional, context.SemanticModel, context.CancellationToken, out _, out _))
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, conditional.QuestionToken.GetLocation()));
+        }
+    }
+
+    internal static bool TryGetReplacementOperands(
+        ConditionalExpressionSyntax conditional, SemanticModel model, System.Threading.CancellationToken token,
+        out ExpressionSyntax checkedTarget, out ExpressionSyntax fallback)
+    {
+        checkedTarget = fallback = null!;
+        if (conditional.SyntaxTree.Options is not CSharpParseOptions parseOptions ||
             (parseOptions.LanguageVersion != LanguageVersion.Default &&
              parseOptions.LanguageVersion < LanguageVersion.CSharp2))
         {
-            return;
+            return false;
         }
 
-        var conditional = (ConditionalExpressionSyntax)context.Node;
-        if (conditional.ContainsDirectives ||
+        if (conditional.ContainsDiagnostics || conditional.ContainsDirectives ||
             !TryGetNullCheck(
                 conditional.Condition,
-                context.SemanticModel,
-                context.CancellationToken,
-                out var checkedTarget,
+                model,
+                token,
+                out checkedTarget,
                 out var nullWhenTrue))
         {
-            return;
+            return false;
         }
 
         var repeatedTarget = nullWhenTrue ? conditional.WhenFalse : conditional.WhenTrue;
-        var fallback = nullWhenTrue ? conditional.WhenTrue : conditional.WhenFalse;
-        var checkedOperation = context.SemanticModel.GetOperation(checkedTarget, context.CancellationToken);
-        var repeatedOperation = context.SemanticModel.GetOperation(repeatedTarget, context.CancellationToken);
+        fallback = nullWhenTrue ? conditional.WhenTrue : conditional.WhenFalse;
+        var checkedOperation = model.GetOperation(checkedTarget, token);
+        var repeatedOperation = model.GetOperation(repeatedTarget, token);
         if (!IsStableSupportedTarget(checkedOperation) ||
             repeatedOperation is null ||
             !AreEquivalentReferences(checkedOperation!, repeatedOperation) ||
             HasUnpreservableSingleLineComment(conditional, checkedTarget, fallback))
         {
-            return;
+            return false;
         }
 
         var replacement = SyntaxFactory.BinaryExpression(
             SyntaxKind.CoalesceExpression,
             checkedTarget.WithoutTrivia(),
             fallback.WithoutTrivia());
-        var originalType = context.SemanticModel.GetTypeInfo(conditional, context.CancellationToken);
-        var replacementType = context.SemanticModel.GetSpeculativeTypeInfo(
+        var originalType = model.GetTypeInfo(conditional, token);
+        var replacementType = model.GetSpeculativeTypeInfo(
             conditional.SpanStart,
             replacement,
             SpeculativeBindingOption.BindAsExpression);
-        if (!SameType(originalType.Type, replacementType.Type))
-        {
-            return;
-        }
-
-        context.ReportDiagnostic(Diagnostic.Create(Rule, conditional.QuestionToken.GetLocation()));
+        // ?? can unwrap Nullable<T> before converting the non-null value.
+        // Two operators returning the very same type can run different code.
+        return originalType.Type is { TypeKind: not TypeKind.Error } &&
+            SameType(originalType.Type, replacementType.Type) &&
+            !model.GetConversion(repeatedTarget, token).IsUserDefined &&
+            !model.GetConversion(fallback, token).IsUserDefined;
     }
 
     private static bool TryGetNullCheck(

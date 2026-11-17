@@ -702,4 +702,38 @@ public sealed class UseThrowIfNullAnalyzerTests
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
 
+    [Fact]
+    public Task CallsFrameworkMethodEvenWhenTypeNameIsShadowed()
+    {
+        const string source = """
+            using System;
+            class C
+            {
+                class Other { public void ThrowIfNull(object? value, string name) { } }
+                void Run(object? x)
+                {
+                    var ArgumentNullException = new Other();
+                    if (x {|#0:is|} null)
+                    {
+                        throw new ArgumentNullException(nameof(x)); // inner
+                    } // outer
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System;
+            class C
+            {
+                class Other { public void ThrowIfNull(object? value, string name) { } }
+                void Run(object? x)
+                {
+                    var ArgumentNullException = new Other();
+                    global::System.ArgumentNullException.ThrowIfNull(x, nameof(x)); // inner
+                                                                                    // outer
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(UseThrowIfNullAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
 }

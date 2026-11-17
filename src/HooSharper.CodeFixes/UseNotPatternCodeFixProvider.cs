@@ -67,7 +67,7 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
         }
 
         var rewrittenTarget = (ExpressionSyntax)rewriter.Visit(target)!;
-        var replacement = CreatePatternReplacement(logicalNot, rewrittenTarget, isKeyword, pattern);
+        var replacement = CreatePatternReplacement(logicalNot, rewrittenTarget, isKeyword, pattern, logicalNot.Parent);
         return document.WithSyntaxRoot(root.ReplaceNode(logicalNot, replacement));
     }
 
@@ -75,7 +75,8 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
         PrefixUnaryExpressionSyntax logicalNot,
         ExpressionSyntax target,
         SyntaxToken isKeyword,
-        PatternSyntax pattern)
+        PatternSyntax pattern,
+        SyntaxNode? parent)
     {
         var parenthesized = (ParenthesizedExpressionSyntax)logicalNot.Operand;
         var removedTokenTrivia = logicalNot.OperatorToken.TrailingTrivia
@@ -95,8 +96,19 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
             GetOriginalPattern(logicalNot).GetTrailingTrivia()
                 .AddRange(parenthesized.CloseParenToken.LeadingTrivia)
                 .AddRange(logicalNot.GetTrailingTrivia()));
-        return SyntaxFactory.IsPatternExpression(target.WithoutLeadingTrivia(), isKeyword, negatedPattern)
-            .WithLeadingTrivia(logicalNot.GetLeadingTrivia().AddRange(removedTokenTrivia))
+        ExpressionSyntax replacement = SyntaxFactory.IsPatternExpression(target.WithoutLeadingTrivia(), isKeyword, negatedPattern);
+        // "is" binds less tightly than a cast or unary operator. Preserve the
+        // original grouping in expression contexts unless they already delimit it.
+        if (parent is ExpressionSyntax and not (ParenthesizedExpressionSyntax or AssignmentExpressionSyntax or
+                ConditionalExpressionSyntax or LambdaExpressionSyntax) &&
+            parent.Kind() is not (SyntaxKind.EqualsExpression or SyntaxKind.NotEqualsExpression or
+                SyntaxKind.BitwiseAndExpression or SyntaxKind.BitwiseOrExpression or SyntaxKind.ExclusiveOrExpression or
+                SyntaxKind.LogicalAndExpression or SyntaxKind.LogicalOrExpression or SyntaxKind.CoalesceExpression))
+        {
+            replacement = SyntaxFactory.ParenthesizedExpression(replacement);
+        }
+
+        return replacement.WithLeadingTrivia(logicalNot.GetLeadingTrivia().AddRange(removedTokenTrivia))
             .WithTrailingTrivia(trailingTrivia);
     }
 
@@ -120,7 +132,7 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
             var canRewrite = CanRewrite(node);
             var visited = (PrefixUnaryExpressionSyntax)base.VisitPrefixUnaryExpression(node)!;
             return canRewrite && TryGetParts(visited, out var target, out var isKeyword, out var pattern)
-                ? CreatePatternReplacement(visited, target, isKeyword, pattern)
+                ? CreatePatternReplacement(visited, target, isKeyword, pattern, node.Parent)
                 : visited;
         }
 

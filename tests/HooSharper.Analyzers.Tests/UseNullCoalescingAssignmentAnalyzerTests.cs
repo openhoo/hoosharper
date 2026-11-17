@@ -921,4 +921,69 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
         Assert.Empty(actions);
     }
 
+    [Fact]
+    public Task KeepsTargetTypedDefaultsAndNullableConversions() =>
+        VerifyCS.VerifyAnalyzerAsync("""
+            class C
+            {
+                struct S
+                {
+                    public static implicit operator int?(S value) => 42;
+                    public static implicit operator int(S value) => 13;
+                }
+
+                void Run(int? a, int? b, int? c, int? d, S source, bool condition)
+                {
+                    if (a is null) { a = default; }
+                    if (b is null) { b = condition ? default : default; }
+                    if (c is null) { c = condition switch { true => default, false => default }; }
+                    if (d is null) { d = source; }
+                }
+            }
+            """);
+
+    [Fact]
+    public Task KeepsReferenceReassignmentAndScopedOutVariable() =>
+        VerifyCS.VerifyAnalyzerAsync("""
+            class C
+            {
+                int value = 42;
+                string Get(out int n) { n = 7; return ""; }
+                int Run(string? first, string? second)
+                {
+                    ref string? current = ref first;
+                    if (current is null) { current = ref second; }
+                    if (first is null) { first = Get(out var value); }
+                    return value;
+                }
+            }
+            """);
+
+    [Fact]
+    public Task KeepsTriviaOnTheAssignmentOperator()
+    {
+        const string source = """
+            class C
+            {
+                void Run(string? x)
+                {
+                    if (x {|#0:is|} null)
+                    {
+                        x /* left */ = /* right */ "value";
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class C
+            {
+                void Run(string? x)
+                {
+                    x /* left */ ??= /* right */ "value";
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
 }
