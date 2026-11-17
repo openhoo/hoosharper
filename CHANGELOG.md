@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.13 (2026-11-17)
+
+### Bug Fixes
+
+- **analyzers:** preserve C# behavior and binding in code fixes (462f028)
+
+### Other Changes
+
+- **deps:** patch test harness cryptography dependency (5a63cfb)
+
 ## 0.3.12 (2026-10-13)
 
 ### Bug Fixes
