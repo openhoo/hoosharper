@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -32,13 +33,24 @@ public sealed class UseTypePatternAnalyzer : DiagnosticAnalyzer
 
     private static void AnalyzeLocalDeclaration(SyntaxNodeAnalysisContext context)
     {
-        if (context.Node.SyntaxTree.Options is not CSharpParseOptions parseOptions ||
+        if (FindCandidate((LocalDeclarationStatementSyntax)context.Node,
+                context.SemanticModel, context.CancellationToken) is { } candidate)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, candidate.OperatorToken.GetLocation()));
+        }
+    }
+
+    internal static BinaryExpressionSyntax? FindCandidate(
+        LocalDeclarationStatementSyntax declarationStatement,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken)
+    {
+        if (declarationStatement.SyntaxTree.Options is not CSharpParseOptions parseOptions ||
             !SupportsTypePatterns(parseOptions.LanguageVersion))
         {
-            return;
+            return null;
         }
 
-        var declarationStatement = (LocalDeclarationStatementSyntax)context.Node;
         if (!declarationStatement.Declaration.Type.IsVar ||
             !declarationStatement.UsingKeyword.IsKind(SyntaxKind.None) ||
             !declarationStatement.AwaitKeyword.IsKind(SyntaxKind.None) ||
@@ -46,7 +58,7 @@ public sealed class UseTypePatternAnalyzer : DiagnosticAnalyzer
             declarationStatement.Parent is not BlockSyntax block ||
             declarationStatement.ContainsDirectives)
         {
-            return;
+            return null;
         }
 
         var declarator = declarationStatement.Declaration.Variables[0];
@@ -55,7 +67,7 @@ public sealed class UseTypePatternAnalyzer : DiagnosticAnalyzer
             !asExpression.IsKind(SyntaxKind.AsExpression) ||
             asExpression.Right is NullableTypeSyntax)
         {
-            return;
+            return null;
         }
 
         var statementIndex = block.Statements.IndexOf(declarationStatement);
@@ -63,52 +75,63 @@ public sealed class UseTypePatternAnalyzer : DiagnosticAnalyzer
             block.Statements[statementIndex + 1] is not IfStatementSyntax ifStatement ||
             ifStatement.ContainsDirectives)
         {
-            return;
+            return null;
         }
 
         var checkedIdentifier = GetNullCheckedIdentifier(ifStatement.Condition);
         var nullCheck = WalkDownParentheses(ifStatement.Condition);
         if (checkedIdentifier is null ||
             (nullCheck is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.NotEqualsExpression } &&
-             !HooSharper.Internal.NullComparisonSafety.IsSafeBinary(context.SemanticModel.GetOperation(nullCheck, context.CancellationToken))))
+             !HooSharper.Internal.NullComparisonSafety.IsSafeBinary(semanticModel.GetOperation(nullCheck, cancellationToken))))
         {
-            return;
+            return null;
         }
 
-        var local = context.SemanticModel.GetDeclaredSymbol(declarator, context.CancellationToken) as ILocalSymbol;
-        var checkedSymbol = context.SemanticModel.GetSymbolInfo(checkedIdentifier, context.CancellationToken).Symbol;
+        var local = semanticModel.GetDeclaredSymbol(declarator, cancellationToken) as ILocalSymbol;
+        var checkedSymbol = semanticModel.GetSymbolInfo(checkedIdentifier, cancellationToken).Symbol;
         if (local is null || !SymbolEqualityComparer.Default.Equals(local, checkedSymbol))
         {
-            return;
+            return null;
         }
 
-        if (!PreservesNullableDeclaration(local, ifStatement.Statement, context.SemanticModel))
+        if (!PreservesNullableDeclaration(local, ifStatement.Statement, semanticModel))
         {
-            return;
+            return null;
         }
 
-        var patternType = context.SemanticModel.GetTypeInfo(asExpression.Right, context.CancellationToken).Type;
-        if (patternType is null || patternType.TypeKind is TypeKind.Dynamic or TypeKind.Error || IsNullableValueType(patternType))
+        var patternType = semanticModel.GetTypeInfo(asExpression.Right, cancellationToken).Type;
+        // A type or alias named var may have converted the as-result. A null
+        // literal is legal on the left of as, but cannot be a pattern input.
+        if (patternType is null || patternType.TypeKind is TypeKind.Dynamic or TypeKind.Error ||
+            IsNullableValueType(patternType) || !SymbolEqualityComparer.Default.Equals(local.Type, patternType) ||
+            semanticModel.GetTypeInfo(asExpression.Left, cancellationToken).Type is not { TypeKind: not TypeKind.Error } inputType)
         {
-            return;
+            return null;
+        }
+
+        if (parseOptions.LanguageVersion == LanguageVersion.CSharp7 &&
+            semanticModel.Compilation.ClassifyConversion(inputType, patternType) is
+                { IsIdentity: false, IsReference: false, IsBoxing: false, IsUnboxing: false })
+        {
+            return null;
         }
 
         if (ifStatement.Else is not null && ContainsReference(
-                ifStatement.Else.Statement, local, declarator.Identifier.ValueText, context.SemanticModel, context.CancellationToken))
+                ifStatement.Else.Statement, local, declarator.Identifier.ValueText, semanticModel, cancellationToken))
         {
-            return;
+            return null;
         }
 
         for (var index = statementIndex + 2; index < block.Statements.Count; index++)
         {
             if (ContainsReference(
-                    block.Statements[index], local, declarator.Identifier.ValueText, context.SemanticModel, context.CancellationToken))
+                    block.Statements[index], local, declarator.Identifier.ValueText, semanticModel, cancellationToken))
             {
-                return;
+                return null;
             }
         }
 
-        context.ReportDiagnostic(Diagnostic.Create(Rule, asExpression.OperatorToken.GetLocation()));
+        return asExpression;
     }
 
     private static IdentifierNameSyntax? GetNullCheckedIdentifier(ExpressionSyntax condition)

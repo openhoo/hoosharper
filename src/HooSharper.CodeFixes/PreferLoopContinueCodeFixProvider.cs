@@ -56,7 +56,7 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
             body.Statements.Count == 0 ||
             ifStatement.ContainsDirectives ||
             ifStatement.Parent is not BlockSyntax parentBlock ||
-            HasBindingCollision(ifStatement, parentBlock, body) ||
+            PreferLoopContinueAnalyzer.HasBindingCollision(ifStatement, parentBlock, body) ||
             HooSharper.Internal.ControlFlowScopeSafety.HoistingBodyCrossesUsingDeclaration(
                 body, parentBlock, semanticModel, cancellationToken))
         {
@@ -93,105 +93,6 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
 
         return document.WithSyntaxRoot(root.ReplaceNode(parentBlock, newParentBlock));
     }
-    private static bool HasBindingCollision(
-        IfStatementSyntax ifStatement,
-        BlockSyntax parentBlock,
-        BlockSyntax body)
-    {
-        var introducedNames = CollectDeclaredNames(body);
-        var introducedLabels = CollectDeclaredLabels(body);
-        if (introducedNames.Count == 0 && introducedLabels.Count == 0)
-        {
-            return false;
-        }
-
-        foreach (var token in ifStatement.Condition.DescendantTokens())
-        {
-            if (token.IsKind(SyntaxKind.IdentifierToken) && introducedNames.Contains(token.ValueText))
-            {
-                return true;
-            }
-        }
-
-        var ifIndex = parentBlock.Statements.IndexOf(ifStatement);
-        for (var index = 0; index < parentBlock.Statements.Count; index++)
-        {
-            if (index == ifIndex)
-            {
-                continue;
-            }
-
-            foreach (var node in parentBlock.Statements[index].DescendantNodes())
-            {
-                var declared = GetDeclaredName(node);
-                if (declared is not null && introducedNames.Contains(declared))
-                {
-                    return true;
-                }
-
-                var used = node switch
-                {
-                    IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
-                    GenericNameSyntax generic => generic.Identifier.ValueText,
-                    _ => null,
-                };
-                if (used is not null && introducedNames.Contains(used))
-                {
-                    return true;
-                }
-
-                if (node is LabeledStatementSyntax label &&
-                    introducedLabels.Contains(label.Identifier.ValueText))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-
-    private static HashSet<string> CollectDeclaredNames(SyntaxNode scope)
-    {
-        var names = new HashSet<string>(System.StringComparer.Ordinal);
-        foreach (var node in scope.DescendantNodes())
-        {
-            var name = GetDeclaredName(node);
-            if (name is not null)
-            {
-                names.Add(name);
-            }
-        }
-
-        return names;
-    }
-
-    private static HashSet<string> CollectDeclaredLabels(SyntaxNode scope)
-    {
-        var labels = new HashSet<string>(System.StringComparer.Ordinal);
-        foreach (var node in scope.DescendantNodes())
-        {
-            if (node is LabeledStatementSyntax label)
-            {
-                labels.Add(label.Identifier.ValueText);
-            }
-        }
-
-        return labels;
-    }
-
-    private static string? GetDeclaredName(SyntaxNode node) => node switch
-    {
-        VariableDeclaratorSyntax declarator => declarator.Identifier.ValueText,
-        SingleVariableDesignationSyntax designation => designation.Identifier.ValueText,
-        ForEachStatementSyntax forEachStatement => forEachStatement.Identifier.ValueText,
-        CatchDeclarationSyntax catchDeclaration => catchDeclaration.Identifier.ValueText,
-        LocalFunctionStatementSyntax localFunction => localFunction.Identifier.ValueText,
-        _ => null,
-    };
-
-
     private static void PreserveSignificantTrivia(
         BlockSyntax body,
         IfStatementSyntax ifStatement,

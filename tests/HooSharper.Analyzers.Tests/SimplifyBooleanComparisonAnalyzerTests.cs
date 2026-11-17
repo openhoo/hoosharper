@@ -390,4 +390,39 @@ public sealed class SimplifyBooleanComparisonAnalyzerTests
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
     }
 
+    [Fact]
+    public Task KeepsTargetTypeForDefaultInOverloadedCall() =>
+        VerifyCS.VerifyAnalyzerAsync("""
+            class C
+            {
+                void Pick(bool v) { }
+                void Pick(string? v) { }
+                void Run() => Pick(default == true);
+            }
+            """);
+
+    [Fact]
+    public Task KeepsBooleanConversionWhenCancellingNegation()
+    {
+        const string source = """
+            class Flag { public static implicit operator bool(Flag f) => true; }
+            class C
+            {
+                int Pick(bool b) => 1;
+                int Pick(Flag f) => 2;
+                int Run(Flag f) => Pick(!f {|#0:==|} false);
+            }
+            """;
+        const string fixedSource = """
+            class Flag { public static implicit operator bool(Flag f) => true; }
+            class C
+            {
+                int Pick(bool b) => 1;
+                int Pick(Flag f) => 2;
+                int Run(Flag f) => Pick(!!f);
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(SimplifyBooleanComparisonAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
 }

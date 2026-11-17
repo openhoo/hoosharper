@@ -63,7 +63,7 @@ public sealed class PreferEarlyReturnAnalyzer : DiagnosticAnalyzer
         context.ReportDiagnostic(Diagnostic.Create(Rule, ifStatement.IfKeyword.GetLocation()));
     }
 
-    private static bool HasScopeCollision(
+    internal static bool HasScopeCollision(
         IfStatementSyntax ifStatement,
         BlockSyntax parentBlock,
         BlockSyntax body)
@@ -135,15 +135,7 @@ public sealed class PreferEarlyReturnAnalyzer : DiagnosticAnalyzer
 
             foreach (var node in statement.DescendantNodesAndSelf(ShouldDescendInto))
             {
-                var name = node switch
-                {
-                    VariableDeclaratorSyntax variable => variable.Identifier.ValueText,
-                    SingleVariableDesignationSyntax designation => designation.Identifier.ValueText,
-                    ForEachStatementSyntax forEachStatement => forEachStatement.Identifier.ValueText,
-                    CatchDeclarationSyntax catchDeclaration => catchDeclaration.Identifier.ValueText,
-                    LocalFunctionStatementSyntax localFunction => localFunction.Identifier.ValueText,
-                    _ => null,
-                };
+                var name = HooSharper.Internal.ControlFlowScopeSafety.DeclaredName(node);
 
                 if (node is IdentifierNameSyntax identifier && movedNames.Contains(identifier.Identifier.ValueText) ||
                     node is GenericNameSyntax generic && movedNames.Contains(generic.Identifier.ValueText) ||

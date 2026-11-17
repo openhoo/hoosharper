@@ -1003,4 +1003,20 @@ public sealed class PreferLoopContinueAnalyzerTests
             VerifyCS.Diagnostic(PreferLoopContinueAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
     }
 
+    [Fact]
+    public Task KeepsScopeOfAnUnusedQueryRangeVariable() =>
+        VerifyCS.VerifyAnalyzerAsync("""
+            using System.Linq;
+            class C
+            {
+                void Run(bool flag)
+                {
+                    foreach (var i in new[] { 1 })
+                    {
+                        var q = from item in new[] { 1 } let later = 2 select item;
+                        if (flag) { int later = 42; System.Console.Write(later); }
+                    }
+                }
+            }
+            """);
 }

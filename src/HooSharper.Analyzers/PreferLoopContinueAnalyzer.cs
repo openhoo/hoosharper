@@ -91,7 +91,7 @@ public sealed class PreferLoopContinueAnalyzer : DiagnosticAnalyzer
 
             foreach (var node in loopBody.Statements[index].DescendantNodes())
             {
-                var declared = GetDeclaredName(node);
+                var declared = HooSharper.Internal.ControlFlowScopeSafety.DeclaredName(node);
                 if (declared is not null && introducedNames.Contains(declared))
                 {
                     return true;
@@ -124,7 +124,7 @@ public sealed class PreferLoopContinueAnalyzer : DiagnosticAnalyzer
         var names = new HashSet<string>(System.StringComparer.Ordinal);
         foreach (var node in scope.DescendantNodes())
         {
-            var name = GetDeclaredName(node);
+            var name = HooSharper.Internal.ControlFlowScopeSafety.DeclaredName(node);
             if (name is not null)
             {
                 names.Add(name);
@@ -148,15 +148,6 @@ public sealed class PreferLoopContinueAnalyzer : DiagnosticAnalyzer
         return labels;
     }
 
-    private static string? GetDeclaredName(SyntaxNode node) => node switch
-    {
-        VariableDeclaratorSyntax declarator => declarator.Identifier.ValueText,
-        SingleVariableDesignationSyntax designation => designation.Identifier.ValueText,
-        ForEachStatementSyntax forEachStatement => forEachStatement.Identifier.ValueText,
-        CatchDeclarationSyntax catchDeclaration => catchDeclaration.Identifier.ValueText,
-        LocalFunctionStatementSyntax localFunction => localFunction.Identifier.ValueText,
-        _ => null,
-    };
 
     private static bool IsLoopBody(BlockSyntax block) => block.Parent switch
     {

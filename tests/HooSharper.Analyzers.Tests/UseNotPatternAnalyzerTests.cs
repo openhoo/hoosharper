@@ -674,4 +674,35 @@ public sealed class UseNotPatternAnalyzerTests
         Assert.Empty(actions);
     }
 
+    [Fact]
+    public Task PreservesGroupingInsideUnaryOperatorsAndCasts()
+    {
+        const string source = """
+            class C
+            {
+                bool Nested(object value) => !{|#0:!|}(value is string);
+                object Box(object value) => (object){|#1:!|}(value is string);
+            }
+            """;
+        const string fixedSource = """
+            class C
+            {
+                bool Nested(object value) => value is not (not string);
+                object Box(object value) => (object)(value is not string);
+            }
+            """;
+        // Resolving the inner ! exposes the outer ! as a new diagnostic.
+        var test = new CSharpCodeFixTest<UseNotPatternAnalyzer, UseNotPatternCodeFixProvider, DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+            FixedCode = fixedSource,
+            BatchFixedCode = fixedSource,
+            NumberOfIncrementalIterations = 3,
+            NumberOfFixAllIterations = 2,
+        };
+        test.ExpectedDiagnostics.Add(VerifyCS.Diagnostic(UseNotPatternAnalyzer.DiagnosticId).WithLocation(0));
+        test.ExpectedDiagnostics.Add(VerifyCS.Diagnostic(UseNotPatternAnalyzer.DiagnosticId).WithLocation(1));
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
 }

@@ -59,7 +59,8 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
             {
                 Expression: AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.SimpleAssignmentExpression } assignment,
             } ||
-            assignment.ContainsDiagnostics ||
+            assignment.ContainsDiagnostics || assignment.Right is RefExpressionSyntax ||
+            HooSharper.Internal.ControlFlowScopeSafety.HasExpandedScopeCollision(block, block.Statements[0]) ||
             HasDirective(ifStatement) ||
             HasUnpreservedComment(ifStatement.Condition))
         {
@@ -77,7 +78,33 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
             TryGetSupportedTargetOperation(assignment.Left, semanticModel, cancellationToken,
                 out var assignedOperation) &&
             AreEquivalentReferences(checkedOperation, assignedOperation) &&
-            SupportsNullCoalescingAssignment(assignedOperation.Type);
+            SupportsNullCoalescingAssignment(assignedOperation.Type) &&
+            PreservesNullableConversion(assignedOperation.Type!, assignment, semanticModel, cancellationToken);
+    }
+
+    private static bool PreservesNullableConversion(
+        ITypeSymbol target, AssignmentExpressionSyntax assignment, SemanticModel model, System.Threading.CancellationToken token)
+    {
+        if (target is not INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } nullable)
+        {
+            return true;
+        }
+
+        // ??= tries the underlying type first. In particular, default can become
+        // zero and an implicit conversion to T can differ from the one to T?.
+        var value = assignment.Right;
+        var replacement = SyntaxFactory.AssignmentExpression(SyntaxKind.CoalesceAssignmentExpression, assignment.Left, value);
+        var resultType = model.GetSpeculativeTypeInfo(assignment.SpanStart, replacement, SpeculativeBindingOption.BindAsExpression).Type;
+        if (SymbolEqualityComparer.Default.Equals(resultType, nullable))
+        {
+            return true;
+        }
+
+        var underlying = nullable.TypeArguments[0];
+        return SymbolEqualityComparer.Default.Equals(resultType, underlying) &&
+            !model.GetConversion(value, token).IsUserDefined && !model.ClassifyConversion(value, underlying).IsUserDefined &&
+            model.GetSpeculativeTypeInfo(value.SpanStart, value, SpeculativeBindingOption.BindAsExpression)
+                .Type is { TypeKind: not (TypeKind.Error or TypeKind.Dynamic) };
     }
 
     private static bool TryGetNullCheckedTarget(

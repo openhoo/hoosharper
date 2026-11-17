@@ -1638,4 +1638,40 @@ public sealed class UseTryGetValueAnalyzerTests
             VerifyCS.Diagnostic(UseTryGetValueAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
     }
 
+    [Fact]
+    public Task AvoidsOutVarWhenVarNamesAnotherType() =>
+        VerifyCS.VerifyAnalyzerAsync("""
+            using System.Collections.Generic;
+            using var = System.Int32;
+            class C
+            {
+                readonly Dictionary<int, string> map = new();
+                string Run() { if (map.ContainsKey(1)) return map[1]; return ""; }
+            }
+            """);
+
+    [Fact]
+    public Task DoesNotSnapshotBeforeStaticFieldInitialization() =>
+        VerifyCS.VerifyAnalyzerAsync("""
+            using System.Collections.Generic;
+            class C
+            {
+                static readonly Dictionary<int, int> map = new() { [1] = 10 };
+                class Other
+                {
+                    public static readonly int Offset;
+                    static Other() { map.Remove(1); map.Add(1, 50); Offset = 1; }
+                }
+
+                int Run()
+                {
+                    if (map.ContainsKey(1))
+                    {
+                        int offset = Other.Offset;
+                        return map[1] + offset;
+                    }
+                    return 0;
+                }
+            }
+            """);
 }

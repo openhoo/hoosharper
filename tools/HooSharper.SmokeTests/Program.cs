@@ -6,6 +6,7 @@ using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.CodeFixes;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.MSBuild;
 
@@ -116,7 +117,7 @@ static async Task<int> RunAsync(string projectPath, string outputPath,
             var changes = operations.OfType<ApplyChangesOperation>().ToArray();
             if (changes.Length != 1)
                 throw new InvalidOperationException($"{group.Key}: expected one ApplyChangesOperation.");
-            var fixedProject = changes[0].ChangedSolution.GetProject(project.Id)!;
+            var fixedProject = await ReparseChangesAsync(project, changes[0].ChangedSolution);
             var fixedCompilation = await fixedProject.GetCompilationAsync()
                 ?? throw new InvalidOperationException("Fixed project did not compile.");
             var errors = fixedCompilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error)
@@ -194,7 +195,7 @@ static async Task<int> RunAsync(string projectPath, string outputPath,
                     continue;
                 }
                 var operations = await action.GetOperationsAsync(CancellationToken.None);
-                current = operations.OfType<ApplyChangesOperation>().Single().ChangedSolution.GetProject(project.Id)!;
+                current = await ReparseChangesAsync(current, operations.OfType<ApplyChangesOperation>().Single().ChangedSolution);
                 var errors = (await current.GetCompilationAsync())!.GetDiagnostics()
                     .Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.ToString()).ToArray();
                 if (errors.Length != 0)
@@ -314,6 +315,22 @@ static async Task<int> RunAsync(string projectPath, string outputPath,
     foreach (var failure in failures)
         Console.Error.WriteLine(failure);
     return failures.Count == 0 ? 0 : 1;
+}
+
+// The IDE saves text, not the fixer's syntax tree. Reparse changed files with
+// their actual language version and symbols so grouping and else binding match a fresh build.
+static async Task<Project> ReparseChangesAsync(Project before, Solution after)
+{
+    var changed = after.GetProject(before.Id)!;
+    foreach (var id in changed.GetChanges(before).GetChangedDocuments())
+    {
+        var document = changed.GetDocument(id)!;
+        var tree = (await document.GetSyntaxTreeAsync())!;
+        var parsed = CSharpSyntaxTree.ParseText(await document.GetTextAsync(), (CSharpParseOptions)tree.Options, tree.FilePath);
+        after = after.WithDocumentSyntaxRoot(id, await parsed.GetRootAsync());
+    }
+
+    return after.GetProject(before.Id)!;
 }
 
 static async Task<ImmutableArray<Diagnostic>> AnalyzeAsync(Compilation compilation,

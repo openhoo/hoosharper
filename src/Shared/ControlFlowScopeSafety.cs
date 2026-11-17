@@ -9,6 +9,82 @@ namespace HooSharper.Internal;
 
 internal static class ControlFlowScopeSafety
 {
+    internal static bool HasExpandedScopeCollision(BlockSyntax block, StatementSyntax nestedStatement)
+    {
+        var introducedNames = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (var node in nestedStatement.DescendantNodesAndSelf())
+        {
+            if (node is SingleVariableDesignationSyntax designation &&
+                !designation.Identifier.IsKind(SyntaxKind.UnderscoreToken))
+            {
+                introducedNames.Add(designation.Identifier.ValueText);
+            }
+        }
+
+        if (introducedNames.Count == 0)
+        {
+            return false;
+        }
+
+        StatementSyntax? containingStatement = null;
+        for (var current = block.Parent; current is not null; current = current.Parent)
+        {
+            if (current is StatementSyntax statement)
+            {
+                containingStatement = statement;
+                break;
+            }
+        }
+
+        if (containingStatement?.Parent is not BlockSyntax parentBlock)
+        {
+            return true;
+        }
+
+        foreach (var token in containingStatement.DescendantTokens())
+        {
+            if (!block.FullSpan.Contains(token.Span) && token.IsKind(SyntaxKind.IdentifierToken) &&
+                introducedNames.Contains(token.ValueText))
+            {
+                return true;
+            }
+        }
+
+        var statementIndex = parentBlock.Statements.IndexOf(containingStatement);
+        for (var index = 0; index < parentBlock.Statements.Count; index++)
+        {
+            if (index == statementIndex)
+            {
+                continue;
+            }
+
+            foreach (var token in parentBlock.Statements[index].DescendantTokens())
+            {
+                if (token.IsKind(SyntaxKind.IdentifierToken) && introducedNames.Contains(token.ValueText))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    internal static string? DeclaredName(SyntaxNode node) => node switch
+    {
+        VariableDeclaratorSyntax variable => variable.Identifier.ValueText,
+        SingleVariableDesignationSyntax designation => designation.Identifier.ValueText,
+        ForEachStatementSyntax loop => loop.Identifier.ValueText,
+        CatchDeclarationSyntax catchDeclaration => catchDeclaration.Identifier.ValueText,
+        LocalFunctionStatementSyntax function => function.Identifier.ValueText,
+        FromClauseSyntax from => from.Identifier.ValueText,
+        LetClauseSyntax let => let.Identifier.ValueText,
+        JoinClauseSyntax join => join.Identifier.ValueText,
+        JoinIntoClauseSyntax into => into.Identifier.ValueText,
+        QueryContinuationSyntax continuation => continuation.Identifier.ValueText,
+        _ => null,
+    };
+
     internal static bool CanRemoveElse(
         IfStatementSyntax ifStatement,
         SemanticModel semanticModel,

@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-using System.Linq;
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -39,38 +37,36 @@ public sealed class OmitBracesForSingleLineIfAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        ReportIfSafe(context, ifStatement.Statement, ifStatement.Else is not null);
+        ReportIfSafe(context, ifStatement.Statement);
 
         if (ifStatement.Else is { Statement: not IfStatementSyntax } elseClause)
         {
-            ReportIfSafe(context, elseClause.Statement, hasFollowingElse: false);
+            ReportIfSafe(context, elseClause.Statement);
         }
     }
 
-    private static void ReportIfSafe(SyntaxNodeAnalysisContext context, StatementSyntax statement, bool hasFollowingElse)
+    private static void ReportIfSafe(SyntaxNodeAnalysisContext context, StatementSyntax statement)
     {
-        if (statement.ContainsDiagnostics ||
-            statement is not BlockSyntax { Statements.Count: 1 } block)
+        if (statement is BlockSyntax block && CanRemoveBraces(block))
         {
-            return;
+            context.ReportDiagnostic(Diagnostic.Create(Rule, block.OpenBraceToken.GetLocation()));
         }
-
-        var nestedStatement = block.Statements[0];
-        if (nestedStatement is LocalDeclarationStatementSyntax or LocalFunctionStatementSyntax or
-            LabeledStatementSyntax ||
-            hasFollowingElse && CanCaptureFollowingElse(nestedStatement) ||
-            HasDirective(block) ||
-            HasExpandedScopeCollision(block, nestedStatement))
-        {
-            return;
-        }
-
-        context.ReportDiagnostic(Diagnostic.Create(Rule, block.OpenBraceToken.GetLocation()));
     }
+
+    internal static bool CanRemoveBraces(BlockSyntax block) =>
+        block.Parent is IfStatementSyntax or ElseClauseSyntax &&
+        block.Statements.Count == 1 && !block.ContainsDiagnostics && !block.ContainsDirectives &&
+        block.Statements[0] is not (LocalDeclarationStatementSyntax or LocalFunctionStatementSyntax or LabeledStatementSyntax) &&
+        !(block.CloseBraceToken.GetNextToken().IsKind(SyntaxKind.ElseKeyword) &&
+          CanCaptureFollowingElse(block.Statements[0])) &&
+        !HooSharper.Internal.ControlFlowScopeSafety.HasExpandedScopeCollision(block, block.Statements[0]);
 
     private static bool CanCaptureFollowingElse(StatementSyntax statement) =>
         statement switch
         {
+            // Fix All may also remove a single-statement block on this branch.
+            BlockSyntax { Statements.Count: 1, Parent: IfStatementSyntax or ElseClauseSyntax } block =>
+                CanCaptureFollowingElse(block.Statements[0]),
             IfStatementSyntax { Else: null } => true,
             IfStatementSyntax { Else: { Statement: var elseStatement } } =>
                 CanCaptureFollowingElse(elseStatement),
@@ -86,79 +82,4 @@ public sealed class OmitBracesForSingleLineIfAnalyzer : DiagnosticAnalyzer
             LabeledStatementSyntax labeledStatement => CanCaptureFollowingElse(labeledStatement.Statement),
             _ => false,
         };
-
-    private static bool HasExpandedScopeCollision(BlockSyntax block, StatementSyntax nestedStatement)
-    {
-        var introducedNames = new HashSet<string>(System.StringComparer.Ordinal);
-        foreach (var node in nestedStatement.DescendantNodesAndSelf())
-        {
-            if (node is SingleVariableDesignationSyntax designation &&
-                !designation.Identifier.IsKind(SyntaxKind.UnderscoreToken))
-            {
-                introducedNames.Add(designation.Identifier.ValueText);
-            }
-        }
-
-        if (introducedNames.Count == 0)
-        {
-            return false;
-        }
-
-        StatementSyntax? containingStatement = null;
-        for (var current = block.Parent; current is not null; current = current.Parent)
-        {
-            if (current is StatementSyntax statement)
-            {
-                containingStatement = statement;
-                break;
-            }
-        }
-
-        if (containingStatement?.Parent is not BlockSyntax parentBlock)
-        {
-            return true;
-        }
-
-        foreach (var token in containingStatement.DescendantTokens())
-        {
-            if (!block.FullSpan.Contains(token.Span) && token.IsKind(SyntaxKind.IdentifierToken) &&
-                introducedNames.Contains(token.ValueText))
-            {
-                return true;
-            }
-        }
-
-        var statementIndex = parentBlock.Statements.IndexOf(containingStatement);
-        for (var index = 0; index < parentBlock.Statements.Count; index++)
-        {
-            if (index == statementIndex)
-            {
-                continue;
-            }
-
-            foreach (var token in parentBlock.Statements[index].DescendantTokens())
-            {
-                if (token.IsKind(SyntaxKind.IdentifierToken) && introducedNames.Contains(token.ValueText))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-
-    private static bool HasDirective(BlockSyntax block)
-    {
-        foreach (var trivia in block.DescendantTrivia(descendIntoTrivia: true))
-        {
-            if (trivia.IsDirective)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
 }

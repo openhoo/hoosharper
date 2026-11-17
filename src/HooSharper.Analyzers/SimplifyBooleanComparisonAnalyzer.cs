@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Linq;
+using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -37,28 +38,26 @@ public sealed class SimplifyBooleanComparisonAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeComparison(SyntaxNodeAnalysisContext context)
     {
         var comparison = (BinaryExpressionSyntax)context.Node;
-        if (comparison.ContainsDirectives || comparison.ContainsDiagnostics ||
-            !TryGetBooleanLiteralOperand(comparison, out _))
+        if (CanSimplify(comparison, context.SemanticModel, context.CancellationToken) &&
+            !HasEligibleAncestor(comparison, context.SemanticModel, context.CancellationToken))
         {
-            return;
+            context.ReportDiagnostic(Diagnostic.Create(Rule, comparison.OperatorToken.GetLocation()));
         }
-
-        if (context.SemanticModel.GetOperation(comparison, context.CancellationToken) is not IBinaryOperation operation ||
-            !IsSafeComparison(operation) ||
-            HasEligibleAncestor(comparison, context.SemanticModel, context.CancellationToken))
-        {
-            return;
-        }
-
-        context.ReportDiagnostic(Diagnostic.Create(Rule, comparison.OperatorToken.GetLocation()));
     }
 
-    private static bool IsSafeComparison(IBinaryOperation operation) =>
-        operation.OperatorMethod is null &&
-        IsBooleanOperand(operation.LeftOperand) &&
-        IsBooleanOperand(operation.RightOperand) &&
-        operation.Type?.SpecialType == SpecialType.System_Boolean &&
-        !ContainsUserDefinedNot(operation);
+    internal static bool CanSimplify(BinaryExpressionSyntax comparison, SemanticModel model, CancellationToken token) =>
+        !comparison.ContainsDirectives && !comparison.ContainsDiagnostics &&
+        TryGetBooleanLiteralOperand(comparison, out var operand) &&
+        model.GetOperation(comparison, token) is IBinaryOperation { OperatorMethod: null } operation &&
+        IsBooleanOperand(operation.LeftOperand) && IsBooleanOperand(operation.RightOperand) &&
+        operation.Type?.SpecialType == SpecialType.System_Boolean && !ContainsUserDefinedNot(operation) &&
+        HasIndependentBooleanType(operand, model, comparison.SpanStart);
+
+    // Removing == true (or !) must leave a bool even when overload resolution
+    // no longer supplies a target type, as with Pick(default == true).
+    internal static bool HasIndependentBooleanType(ExpressionSyntax operand, SemanticModel model, int position) =>
+        model.GetSpeculativeTypeInfo(position, operand, SpeculativeBindingOption.BindAsExpression)
+            .Type?.SpecialType == SpecialType.System_Boolean;
 
     private static bool IsBooleanOperand(IOperation operation) =>
         operation.Type?.SpecialType == SpecialType.System_Boolean &&
@@ -72,9 +71,7 @@ public sealed class SimplifyBooleanComparisonAnalyzer : DiagnosticAnalyzer
         for (var ancestor = comparison.Parent; ancestor is not null; ancestor = ancestor.Parent)
         {
             if (ancestor is BinaryExpressionSyntax parent &&
-                TryGetBooleanLiteralOperand(parent, out _) &&
-                semanticModel.GetOperation(parent, cancellationToken) is IBinaryOperation operation &&
-                IsSafeComparison(operation))
+                CanSimplify(parent, semanticModel, cancellationToken))
             {
                 return true;
             }

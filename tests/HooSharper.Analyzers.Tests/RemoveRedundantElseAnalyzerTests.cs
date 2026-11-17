@@ -919,4 +919,42 @@ public sealed class RemoveRedundantElseAnalyzerTests
         Assert.Empty(actions);
     }
 
+    [Fact]
+    public Task KeepsScopeOfUnbracedElseWithOutVariable()
+    {
+        const string source = """
+            class C
+            {
+                int value = 42;
+                void Get(out int n) => n = 7;
+                int Run(bool flag)
+                {
+                    if (flag)
+                        return 0;
+                    {|#0:else|}
+                        Get(out var value);
+                    return value;
+                }
+            }
+            """;
+        const string fixedSource = """
+            class C
+            {
+                int value = 42;
+                void Get(out int n) => n = 7;
+                int Run(bool flag)
+                {
+                    if (flag)
+                        return 0;
+                    {
+                        Get(out var value);
+                    }
+
+                    return value;
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(RemoveRedundantElseAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
 }

@@ -54,7 +54,8 @@ public sealed class RemoveRedundantNullConditionalGuardCodeFixProvider : CodeFix
         }
         if (root is null ||
             ifStatement.Statement is not BlockSyntax { Statements.Count: 1 } block ||
-            block.Statements[0] is not ExpressionStatementSyntax expressionStatement)
+            block.Statements[0] is not ExpressionStatementSyntax expressionStatement ||
+            HooSharper.Internal.ControlFlowScopeSafety.HasExpandedScopeCollision(block, expressionStatement))
         {
             return document;
         }
@@ -71,18 +72,9 @@ public sealed class RemoveRedundantNullConditionalGuardCodeFixProvider : CodeFix
             .AddRange(CommentLines(block.OpenBraceToken.TrailingTrivia))
             .AddRange(CommentLines(expressionStatement.GetLeadingTrivia()))
             .AddRange(CommentLines(block.CloseBraceToken.LeadingTrivia));
-        var trailingTrivia = InlineComments(expressionStatement.GetTrailingTrivia())
-            .AddRange(InlineComments(block.CloseBraceToken.TrailingTrivia));
-
-        trailingTrivia = trailingTrivia
-            .AddRange(ifStatement.GetTrailingTrivia().Where(static trivia =>
-                !trivia.IsKind(SyntaxKind.SingleLineCommentTrivia) &&
-                !trivia.IsKind(SyntaxKind.MultiLineCommentTrivia) &&
-                !trivia.IsKind(SyntaxKind.WhitespaceTrivia)));
-
         var replacement = expressionStatement
             .WithLeadingTrivia(leadingTrivia)
-            .WithTrailingTrivia(trailingTrivia);
+            .WithTrailingTrivia(CodeFixTrivia.TrailingAfterUnwrapping(expressionStatement, ifStatement));
 
         return document.WithSyntaxRoot(root.ReplaceNode(ifStatement, replacement));
     }
@@ -100,20 +92,4 @@ public sealed class RemoveRedundantNullConditionalGuardCodeFixProvider : CodeFix
 
         return result;
     }
-    private static SyntaxTriviaList InlineComments(SyntaxTriviaList trivia)
-    {
-        var result = SyntaxFactory.TriviaList();
-        foreach (var item in trivia)
-        {
-            if (item.IsKind(SyntaxKind.SingleLineCommentTrivia) || item.IsKind(SyntaxKind.MultiLineCommentTrivia))
-            {
-                result = result.Count == 0
-                    ? result.Add(SyntaxFactory.Space).Add(item)
-                    : result.Add(item);
-            }
-        }
-
-        return result;
-    }
-
 }

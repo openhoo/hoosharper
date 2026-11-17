@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -28,7 +27,7 @@ public sealed class OmitBracesForSingleLineIfCodeFixProvider : CodeFixProvider
         var block = root?.FindToken(diagnostic.Location.SourceSpan.Start).Parent?
             .AncestorsAndSelf().OfType<BlockSyntax>().FirstOrDefault();
 
-        if (block is null)
+        if (block is null || !OmitBracesForSingleLineIfAnalyzer.CanRemoveBraces(block))
         {
             return;
         }
@@ -47,14 +46,8 @@ public sealed class OmitBracesForSingleLineIfCodeFixProvider : CodeFixProvider
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-        if (root is null || block.Statements.Count != 1 ||
-            block.FirstAncestorOrSelf<IfStatementSyntax>()?.ContainsDiagnostics == true ||
-            HasDirective(block) ||
-            block.Statements[0] is LabeledStatementSyntax ||
-            block.Parent is IfStatementSyntax { Statement: var thenStatement, Else: not null } &&
-            thenStatement == block &&
-            CanCaptureFollowingElse(block.Statements[0]) ||
-            HasExpandedScopeCollision(block, block.Statements[0]))
+        if (root is null || block.FirstAncestorOrSelf<IfStatementSyntax>()?.ContainsDiagnostics == true ||
+            !OmitBracesForSingleLineIfAnalyzer.CanRemoveBraces(block))
         {
             return document;
         }
@@ -76,87 +69,6 @@ public sealed class OmitBracesForSingleLineIfCodeFixProvider : CodeFixProvider
         return document.WithSyntaxRoot(root.ReplaceNode(block, statement));
     }
 
-    private static bool CanCaptureFollowingElse(StatementSyntax statement) =>
-        statement switch
-        {
-            IfStatementSyntax { Else: null } => true,
-            IfStatementSyntax { Else: { Statement: var elseStatement } } =>
-                CanCaptureFollowingElse(elseStatement),
-            WhileStatementSyntax whileStatement => CanCaptureFollowingElse(whileStatement.Statement),
-            ForStatementSyntax forStatement => CanCaptureFollowingElse(forStatement.Statement),
-            ForEachStatementSyntax forEachStatement => CanCaptureFollowingElse(forEachStatement.Statement),
-            ForEachVariableStatementSyntax forEachVariableStatement =>
-                CanCaptureFollowingElse(forEachVariableStatement.Statement),
-            DoStatementSyntax doStatement => CanCaptureFollowingElse(doStatement.Statement),
-            UsingStatementSyntax usingStatement => CanCaptureFollowingElse(usingStatement.Statement),
-            FixedStatementSyntax fixedStatement => CanCaptureFollowingElse(fixedStatement.Statement),
-            LockStatementSyntax lockStatement => CanCaptureFollowingElse(lockStatement.Statement),
-            LabeledStatementSyntax labeledStatement => CanCaptureFollowingElse(labeledStatement.Statement),
-            _ => false,
-        };
-    private static bool HasExpandedScopeCollision(BlockSyntax block, StatementSyntax nestedStatement)
-    {
-        var introducedNames = new HashSet<string>(System.StringComparer.Ordinal);
-        foreach (var node in nestedStatement.DescendantNodesAndSelf())
-        {
-            if (node is SingleVariableDesignationSyntax designation &&
-                !designation.Identifier.IsKind(SyntaxKind.UnderscoreToken))
-            {
-                introducedNames.Add(designation.Identifier.ValueText);
-            }
-        }
-
-        if (introducedNames.Count == 0)
-        {
-            return false;
-        }
-
-        StatementSyntax? containingStatement = null;
-        for (var current = block.Parent; current is not null; current = current.Parent)
-        {
-            if (current is StatementSyntax statement)
-            {
-                containingStatement = statement;
-                break;
-            }
-        }
-
-        if (containingStatement?.Parent is not BlockSyntax parentBlock)
-        {
-            return true;
-        }
-
-        foreach (var token in containingStatement.DescendantTokens())
-        {
-            if (!block.FullSpan.Contains(token.Span) && token.IsKind(SyntaxKind.IdentifierToken) &&
-                introducedNames.Contains(token.ValueText))
-            {
-                return true;
-            }
-        }
-
-        var statementIndex = parentBlock.Statements.IndexOf(containingStatement);
-        for (var index = 0; index < parentBlock.Statements.Count; index++)
-        {
-            if (index == statementIndex)
-            {
-                continue;
-            }
-
-            foreach (var token in parentBlock.Statements[index].DescendantTokens())
-            {
-                if (token.IsKind(SyntaxKind.IdentifierToken) && introducedNames.Contains(token.ValueText))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private static bool HasDirective(BlockSyntax block) =>
-        block.DescendantTrivia(descendIntoTrivia: true).Any(trivia => trivia.IsDirective);
     private static SyntaxTriviaList CommentLines(
         SyntaxTriviaList trivia,
         SyntaxTrivia endOfLine,

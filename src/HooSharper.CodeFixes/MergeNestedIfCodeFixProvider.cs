@@ -28,7 +28,7 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
         var outerIf = root?.FindToken(diagnostic.Location.SourceSpan.Start).Parent?
             .AncestorsAndSelf().OfType<IfStatementSyntax>().FirstOrDefault();
 
-        if (!TryGetInnerIf(outerIf, out _))
+        if (!TryGetInnerIf(outerIf, out _) || MergeNestedIfAnalyzer.IntroducesDeclarationCollision(outerIf!))
         {
             return;
         }
@@ -93,7 +93,7 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
             .WithStatement(mergedStatement)
             .WithElse(null)
             .WithLeadingTrivia(PreserveRemovedComments(outerIf, innerIf, deepestIf))
-            .WithTrailingTrivia(outerIf.GetTrailingTrivia())
+            .WithTrailingTrivia(CodeFixTrivia.TrailingAfterUnwrapping(deepestIf.Statement, outerIf))
             .WithAdditionalAnnotations(Formatter.Annotation);
 
         return document.WithSyntaxRoot(root.ReplaceNode(outerIf, replacement));
@@ -137,7 +137,7 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
 
         var comments = outerIf.DescendantTrivia(descendIntoTrivia: true)
             .Where(trivia => outerIf.Span.Contains(trivia.Span) &&
-                IsComment(trivia) &&
+                CodeFixTrivia.IsComment(trivia) &&
                 !conditions.Any(condition => condition.Span.Contains(trivia.Span)) &&
                 !deepestIf.Statement.FullSpan.Contains(trivia.Span));
 
@@ -148,7 +148,7 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
             leading = leading.AddRange(indentation);
         }
 
-        foreach (var comment in deepestIf.Statement.GetLeadingTrivia().Where(IsComment))
+        foreach (var comment in deepestIf.Statement.GetLeadingTrivia().Where(CodeFixTrivia.IsComment))
         {
             leading = leading.Add(comment);
             leading = leading.Add(SyntaxFactory.ElasticCarriageReturnLineFeed);
@@ -157,12 +157,6 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
 
         return leading;
     }
-
-    private static bool IsComment(SyntaxTrivia trivia) =>
-        trivia.IsKind(SyntaxKind.SingleLineCommentTrivia) ||
-        trivia.IsKind(SyntaxKind.MultiLineCommentTrivia) ||
-        trivia.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia) ||
-        trivia.IsKind(SyntaxKind.MultiLineDocumentationCommentTrivia);
 
     private static bool AreAllConditionsOrdinaryBoolean(
         SemanticModel semanticModel,

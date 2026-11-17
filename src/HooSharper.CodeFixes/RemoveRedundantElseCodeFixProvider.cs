@@ -101,6 +101,18 @@ public sealed class RemoveRedundantElseCodeFixProvider : CodeFixProvider
             return [statementWithoutElse, preservedBlock];
         }
 
+        // An unbraced embedded statement also has its own declaration scope.
+        // Keep it when moving an out or pattern variable into the parent block.
+        if (elseClause.Statement is not BlockSyntax && RequiresPreservedScope(elseClause.Statement))
+        {
+            var trivia = SignificantTrivia(elseClause.ElseKeyword.LeadingTrivia)
+                .AddRange(SignificantTrivia(elseClause.ElseKeyword.TrailingTrivia));
+            var scope = SyntaxFactory.Block(elseClause.Statement)
+                .WithLeadingTrivia(WithLineBreaks(trivia, addInitialLineBreak: false))
+                .WithAdditionalAnnotations(Formatter.Annotation);
+            return [statementWithoutElse, scope];
+        }
+
         var movedStatements = elseClause.Statement is BlockSyntax block
             ? block.Statements.ToList()
             : [elseClause.Statement];
@@ -139,9 +151,9 @@ public sealed class RemoveRedundantElseCodeFixProvider : CodeFixProvider
         return replacements;
     }
 
-    private static bool RequiresPreservedScope(BlockSyntax block)
+    private static bool RequiresPreservedScope(StatementSyntax statement)
     {
-        foreach (var node in block.DescendantNodes())
+        foreach (var node in statement.DescendantNodesAndSelf())
         {
             if (node is LocalDeclarationStatementSyntax or LocalFunctionStatementSyntax or
                 DeclarationExpressionSyntax or SingleVariableDesignationSyntax or LabeledStatementSyntax)

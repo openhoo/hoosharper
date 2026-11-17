@@ -18,6 +18,7 @@ Console.WriteLine(string.Join("|", example.Sink, example.RedundantElse(false),
     example.NullableGuard(null), example.NullableGuard(9), example.DeclaredPattern("abc"),
     example.DeclaredPattern(1), example.NestedTermination(true, false), example.NestedTermination(false, true)));
 Console.WriteLine(SafetyControls.Run());
+Console.WriteLine(RewriteControls.Run());
 
 public sealed class Service
 {

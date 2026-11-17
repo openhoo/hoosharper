@@ -581,4 +581,18 @@ public sealed class UseNullCoalescingExpressionAnalyzerTests
             fixedSource);
     }
 
+    [Fact]
+    public Task KeepsConversionFromNullableOperandInsteadOfItsUnderlyingValue() =>
+        VerifyCS.VerifyAnalyzerAsync("""
+            struct Source
+            {
+                public static implicit operator int(Source? value) => 42;
+                public static implicit operator int(Source value) => 13;
+            }
+
+            class C
+            {
+                int Run(Source? value) => value is null ? 2 : value;
+            }
+            """);
 }
