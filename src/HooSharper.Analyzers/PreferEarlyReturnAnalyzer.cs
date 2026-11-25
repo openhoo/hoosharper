@@ -60,7 +60,7 @@ public sealed class PreferEarlyReturnAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        context.ReportDiagnostic(Diagnostic.Create(Rule, ifStatement.IfKeyword.GetLocation()));
+        context.ReportIfUncaptured(Rule, ifStatement.IfKeyword.GetLocation(), ifStatement);
     }
 
     internal static bool HasScopeCollision(

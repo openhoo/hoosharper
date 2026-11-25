@@ -36,7 +36,6 @@ public sealed class UseUsingDeclarationCodeFixProvider : CodeFixProvider
             return;
         }
 
-
         context.RegisterCodeFix(
             CodeAction.Create(
                 "Use using declaration",
@@ -60,7 +59,6 @@ public sealed class UseUsingDeclarationCodeFixProvider : CodeFixProvider
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-        var sourceText = await document.GetTextAsync(cancellationToken).ConfigureAwait(false);
         var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
         if (root is null || semanticModel is null ||
             !HooSharper.Internal.ControlFlowScopeSafety.CanConvertUsingStatement(
@@ -72,7 +70,7 @@ public sealed class UseUsingDeclarationCodeFixProvider : CodeFixProvider
             return document;
         }
 
-        var endOfLineText = DetectEndOfLine(sourceText);
+        var endOfLineText = CodeFixTrivia.GetNewLine(document, usingStatement.SyntaxTree, usingStatement.SpanStart, cancellationToken);
         var endOfLine = SyntaxFactory.EndOfLine(endOfLineText);
         var declarationLeadingTrivia = usingStatement.GetLeadingTrivia()
             .AddRange(CommentLines(usingStatement.AwaitKeyword.TrailingTrivia, endOfLine))
@@ -123,10 +121,8 @@ public sealed class UseUsingDeclarationCodeFixProvider : CodeFixProvider
         }
 
         var affectedSpans = CollectAffectedLineBreakSpans(changedRoot, replacementAnnotation);
-        var formattedOptions = changedDocument.Project.Solution.Options.WithChangedOption(
-            FormattingOptions.NewLine,
-            LanguageNames.CSharp,
-            endOfLineText);
+        var documentOptions = await CodeFixTrivia.GetFormattingOptionsAsync(document, cancellationToken).ConfigureAwait(false);
+        var formattedOptions = documentOptions.WithChangedOption(FormattingOptions.NewLine, endOfLineText);
         var formattedDocument = await Formatter.FormatAsync(
                 changedDocument,
                 affectedSpans,
@@ -137,28 +133,8 @@ public sealed class UseUsingDeclarationCodeFixProvider : CodeFixProvider
         var normalizedDocument = await NormalizeFormattedLineEndingsAsync(
             formattedDocument, replacementAnnotation, endOfLineText, cancellationToken).ConfigureAwait(false);
 
-        // Pin the exact final text so downstream consumers cannot re-derive divergent
-        // line endings from the syntax tree under ambient formatting options.
-        var normalizedText = await normalizedDocument.GetTextAsync(cancellationToken).ConfigureAwait(false);
-        return normalizedDocument.WithText(Microsoft.CodeAnalysis.Text.SourceText.From(
-            normalizedText.ToString(), normalizedText.Encoding, normalizedText.ChecksumAlgorithm));
-    }
-    private static string DetectEndOfLine(Microsoft.CodeAnalysis.Text.SourceText sourceText)
-    {
-        for (var position = 0; position < sourceText.Length; position++)
-        {
-            switch (sourceText[position])
-            {
-                case '\n':
-                    return "\n";
-                case '\r':
-                    return position + 1 < sourceText.Length && sourceText[position + 1] == '\n'
-                        ? "\r\n"
-                        : "\r";
-            }
-        }
-
-        return "\r\n";
+        return await CodeFixTrivia.WithTrackedFormattingAsync(document, root.SyntaxTree, normalizedDocument, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static List<Microsoft.CodeAnalysis.Text.TextSpan> CollectAffectedLineBreakSpans(

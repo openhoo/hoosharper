@@ -10,8 +10,8 @@ using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Microsoft.CodeAnalysis.Formatting;
 using Microsoft.CodeAnalysis.Operations;
+using Microsoft.CodeAnalysis.Formatting;
 
 namespace HooSharper.CodeFixes;
 
@@ -49,21 +49,10 @@ public sealed class SimplifyBooleanReturnCodeFixProvider : CodeFixProvider
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
         var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
-        if (root is null || semanticModel is null || ifStatement.Parent is not BlockSyntax parentBlock ||
-            !TryGetReturnedLiteral(ifStatement.Statement, out var branchValue) ||
+        if (root is null || semanticModel is null ||
+            !SimplifyBooleanReturnAnalyzer.TryGetReturns(ifStatement, out var statements, out var index,
+                out var branchValue, out var nextReturn) ||
             ContainsUserDefinedNot(semanticModel.GetOperation(ifStatement.Condition, cancellationToken)))
-        {
-            return document;
-        }
-
-        var index = parentBlock.Statements.IndexOf(ifStatement);
-        if (index < 0 || index + 1 >= parentBlock.Statements.Count)
-        {
-            return document;
-        }
-
-        if (parentBlock.Statements[index + 1] is not ReturnStatementSyntax nextReturn ||
-            !TryGetReturnedLiteral(nextReturn, out var nextValue) || branchValue == nextValue)
         {
             return document;
         }
@@ -76,9 +65,14 @@ public sealed class SimplifyBooleanReturnCodeFixProvider : CodeFixProvider
             .WithTrailingTrivia(significantTrivia)
             .WithAdditionalAnnotations(Formatter.Annotation);
 
-        var statements = parentBlock.Statements.RemoveAt(index).Insert(index, replacement).RemoveAt(index + 1);
-        var newParentBlock = parentBlock.WithStatements(statements);
-        return document.WithSyntaxRoot(root.ReplaceNode(parentBlock, newParentBlock));
+        statements = statements.Replace(ifStatement, replacement).RemoveAt(index + 1);
+        SyntaxNode updated = ifStatement.Parent switch
+        {
+            SwitchSectionSyntax section => section.WithStatements(statements),
+            BlockSyntax block => block.WithStatements(statements),
+            _ => throw new System.InvalidOperationException(),
+        };
+        return await CodeFixTrivia.FormatChangesAsync(document, root.ReplaceNode(ifStatement.Parent!, updated), cancellationToken).ConfigureAwait(false);
     }
 
     private static SyntaxTriviaList CollectSignificantTrivia(
@@ -87,7 +81,7 @@ public sealed class SimplifyBooleanReturnCodeFixProvider : CodeFixProvider
     {
         var trivia = new List<SyntaxTrivia>();
         AddSignificantTrivia(trivia, ifStatement.DescendantTrivia().Where(item =>
-            ifStatement.Span.Contains(item.Span) &&
+            item.SpanStart >= ifStatement.SpanStart &&
             !ifStatement.Condition.Span.Contains(item.Span)));
         AddSignificantTrivia(trivia, nextReturn.DescendantTrivia());
         return SyntaxFactory.TriviaList(WithLineBreaks(trivia));
@@ -110,35 +104,6 @@ public sealed class SimplifyBooleanReturnCodeFixProvider : CodeFixProvider
                 yield return SyntaxFactory.ElasticCarriageReturnLineFeed;
             }
         }
-    }
-
-    private static bool TryGetReturnedLiteral(StatementSyntax statement, out bool value)
-    {
-        var returnStatement = statement switch
-        {
-            ReturnStatementSyntax directReturn => directReturn,
-            BlockSyntax { Statements.Count: 1 } block when block.Statements[0] is ReturnStatementSyntax blockReturn =>
-                blockReturn,
-            _ => null,
-        };
-
-        if (returnStatement?.Expression is LiteralExpressionSyntax literal)
-        {
-            if (literal.IsKind(SyntaxKind.TrueLiteralExpression))
-            {
-                value = true;
-                return true;
-            }
-
-            if (literal.IsKind(SyntaxKind.FalseLiteralExpression))
-            {
-                value = false;
-                return true;
-            }
-        }
-
-        value = false;
-        return false;
     }
 
     private static ExpressionSyntax Negate(ExpressionSyntax expression)

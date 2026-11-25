@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Linq;
+using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -47,19 +49,50 @@ public sealed class OmitBracesForSingleLineIfAnalyzer : DiagnosticAnalyzer
 
     private static void ReportIfSafe(SyntaxNodeAnalysisContext context, StatementSyntax statement)
     {
-        if (statement is BlockSyntax block && CanRemoveBraces(block))
+        if (statement is BlockSyntax block && CanRemoveBraces(block, context.Compilation.Options, context.CancellationToken))
         {
-            context.ReportDiagnostic(Diagnostic.Create(Rule, block.OpenBraceToken.GetLocation()));
+            context.ReportIfUncaptured(Rule, block.OpenBraceToken.GetLocation(), block);
         }
     }
 
-    internal static bool CanRemoveBraces(BlockSyntax block) =>
+    internal static bool CanRemoveBraces(BlockSyntax block, CompilationOptions options, CancellationToken token) =>
         block.Parent is IfStatementSyntax or ElseClauseSyntax &&
         block.Statements.Count == 1 && !block.ContainsDiagnostics && !block.ContainsDirectives &&
         block.Statements[0] is not (LocalDeclarationStatementSyntax or LocalFunctionStatementSyntax or LabeledStatementSyntax) &&
         !(block.CloseBraceToken.GetNextToken().IsKind(SyntaxKind.ElseKeyword) &&
           CanCaptureFollowingElse(block.Statements[0])) &&
-        !HooSharper.Internal.ControlFlowScopeSafety.HasExpandedScopeCollision(block, block.Statements[0]);
+        !HooSharper.Internal.ControlFlowScopeSafety.HasExpandedScopeCollision(block, block.Statements[0]) &&
+        RespectsBracePolicy(block, options, token);
+
+    private static bool RespectsBracePolicy(BlockSyntax block, CompilationOptions options, CancellationToken token)
+    {
+        var child = block.Statements[0];
+        var lines = child.GetLocation().GetLineSpan().Span;
+        if (lines.Start.Line != lines.End.Line && ProjectStylePolicy.IsEnabled(options, block.SyntaxTree, "SA1519", token))
+            return false;
+        if ((child.GetLeadingTrivia().Any(t => t.IsKind(SyntaxKind.SingleLineCommentTrivia)) ||
+             block.OpenBraceToken.TrailingTrivia.Any(t => t.IsKind(SyntaxKind.SingleLineCommentTrivia))) &&
+            ProjectStylePolicy.IsEnabled(options, block.SyntaxTree, "SA1515", token))
+            return false;
+
+        // Removing just one set of braces would make this if/else chain
+        // inconsistent. This must also be safe as an individual lightbulb fix.
+        if (block.Parent is IfStatementSyntax { Else: null, Parent: not ElseClauseSyntax })
+            return true;
+        if (!ProjectStylePolicy.IsEnabled(options, block.SyntaxTree, "SA1520", token))
+            return true;
+        var branch = (IfStatementSyntax)(block.Parent is ElseClauseSyntax clause ? clause.Parent! : block.Parent!);
+        while (branch.Parent is ElseClauseSyntax { Parent: IfStatementSyntax owner })
+            branch = owner;
+        while (true)
+        {
+            if (branch.Statement is BlockSyntax other && other != block)
+                return false;
+            if (branch.Else?.Statement is not IfStatementSyntax next)
+                return branch.Else?.Statement is not BlockSyntax last || last == block;
+            branch = next;
+        }
+    }
 
     private static bool CanCaptureFollowingElse(StatementSyntax statement) =>
         statement switch

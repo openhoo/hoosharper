@@ -84,10 +84,8 @@ Without central package management:
 Build the NuGet package:
 
 ```bash
-dotnet build HooSharper.slnx -c Release
 dotnet pack src/HooSharper.Analyzers/HooSharper.Analyzers.csproj \
   -c Release \
-  --no-build \
   -o artifacts
 ```
 
@@ -126,7 +124,13 @@ After adding the package:
 
 All current fixers use Roslyn's batch Fix All provider. Where the host supports it, an action can be applied to the document, project, or solution.
 
-Analyzer diagnostics also run during `dotnet build`. Code fixes are interactive IDE operations; a command-line build reports diagnostics but does not rewrite source files.
+Analyzer diagnostics also run during `dotnet build`. To apply a packaged fix from the command line, run the SDK formatter on the consuming project. For example, this applies the boolean comparison fix to suggestions and higher severities:
+
+```bash
+dotnet format analyzers MyProject.csproj --diagnostics HOO1006 --severity info
+```
+
+Review the diff and run the project's tests after applying a fix.
 
 ## Configuration
 
@@ -314,7 +318,15 @@ The analyzer does not remove braces when the block:
 - Contains preprocessor directives
 - Is the block of an `else if`; the nested `if` is analyzed independently
 
-These restrictions avoid changing declaration scope or damaging conditional-compilation structure.
+An inner `if/else` stays visibly indented under the outer condition. If a project
+explicitly enables StyleCop’s SA1519, SA1515 or SA1520, HOO1002 also keeps
+braces around multiline children, leading line comments or a branch whose
+siblings would then use braces inconsistently. Under SA1519, HOO1020 leaves
+a chain on one line if wrapping it would create an unbraced multiline child.
+
+When formatting a change, HooSharper honors an explicit `end_of_line`. If
+that option is absent, it uses the source line ending near the edit. This
+keeps CRLF checkouts consistent when fixes run on macOS or Linux.
 
 Configure it with:
 
@@ -330,6 +342,10 @@ csharp_prefer_braces = false:warning
 ```
 
 HOO1002 remains independently configurable through `dotnet_diagnostic.HOO1002.severity`. The built-in option and HooSharper rule may both report in hosts that enable both analyzers. Disable one diagnostic if duplicate suggestions appear.
+
+When inverting guards, HOO1001 and HOO1004 can reverse an ordered integer or
+framework `TimeSpan` comparison. For floating-point numbers, nullable operands
+and custom operators, they preserve the original comparison under negation.
 
 ### HOO1003-HOO1020: Additional automatic fixes
 
@@ -358,6 +374,41 @@ All rules below use category `HooSharper.CodeStyle`, default to Info severity, a
 
 The analyzers deliberately skip ambiguous transformations, including overloaded equality operators, nullable boolean comparisons, unstable expressions with side effects, directive-containing regions, mismatched symbols, changed disposal scope, unavailable framework APIs, unsupported C# language versions, expression-tree-incompatible syntax, scope-expanding declaration collisions, dictionary indexer writes/by-reference uses, implicit callbacks before a dictionary read (including property getters and user-defined conversions/operators), and collection arguments that comparer callbacks could mutate. Dictionary and set rules are restricted to standard framework types and callback-stable receivers, keys, and values.
 
+C# can pass an argument's source text to a method through `CallerArgumentExpression`.
+HooSharper skips suggestions inside a captured argument, including a lambda or
+an extension call's receiver. For example, `Check(ready == true)` keeps its
+original text if `Check` records it. Supplying that text explicitly allows the
+usual simplification. An enclosing edit, such as removing braces, also leaves
+the expression alone if formatting it could change the captured whitespace.
+For an expanded `params` argument the compiler can capture the element or
+the whole invocation, depending on the SDK. HooSharper preserves the text
+the compiler supplies. Unrelated statements in the same block can still be fixed.
+
+`HOO1006` keeps a comparison such as `Read(flag == true)` when replacing it
+with `Read(flag)` would let an `in bool` parameter refer directly to mutable
+storage. The two calls can return different values if the method changes the
+original flag before reading the parameter.
+
+Expression trees expose the structure of the original C# to a query provider.
+HOO1006, HOO1014, HOO1015, HOO1016, and HOO1019 leave quoted lambdas alone,
+including selectors introduced by query syntax. An ordinary delegate can still
+be simplified, even when the query method returns `IQueryable`.
+
+`HOO1017` simplifies adjacent opposite boolean returns inside a block or a
+single `switch` section. It does not combine returns across case labels.
+
+`HOO1010` merges nested conditions with or without braces. It keeps the order
+of the conditions and requires ordinary boolean semantics. An outer guard with
+custom boolean operators stays in place; eligible conditions inside it can
+still be merged.
+
+`HOO1009` preserves the exception's parameter name. It accepts `nameof` for
+the checked symbol and a string literal that exactly matches a checked parameter,
+such as `throw new ArgumentNullException("info")` for the parameter `info`.
+The fix omits the explicit name only when the framework method and compiler
+would supply that exact string. For example, `nameof(@class)` produces
+`"class"`, while capturing the argument would produce `"@class"`.
+
 `HOO1016` supports `char` presence tests with or without `StringComparison`, and
 `string` presence tests with an explicit `StringComparison`. The target framework
 must provide the matching `Contains` overload. String overloads without an explicit
@@ -368,12 +419,23 @@ nullable local writes, and named argument binding. Declaration rewrites skip
 backward jumps that would cross a new using declaration. Dictionary lookups skip
 shadowed symbols and changes to any part of the receiver or key reference chain.
 
-`HOO1008` also accepts a negated built-in `Nullable<T>.HasValue` check on a
-stable local, parameter, or field. `HOO1019` accepts simple declaration patterns
+`HOO1008` accepts a single assignment with or without braces, including a
+negated built-in `Nullable<T>.HasValue` guard. The target can be a local,
+parameter, field, or a source auto-property on a stable receiver. Indexers,
+custom accessors, overridable properties, and properties known only from
+metadata are excluded. `HOO1019` accepts simple declaration patterns
 under logical negation while preserving the variable's definite assignment.
-Redundant-else removal uses semantic control flow to recognize branches whose
+It also simplifies `!(value is not null)` to `value is null`.
+The dictionary, set, and null-conditional guard rules (HOO1011, HOO1012, and
+HOO1018) accept a single embedded statement with or without braces.
+Redundant-else removal handles consecutive terminating `else if` arms in one
+action and keeps the fallback attached to the first arm that can fall through.
+It uses semantic control flow to recognize branches whose
 nested `if` or `try` statements cannot fall through. It keeps a block around an
 embedded `else` statement when moving its variables would change their scope.
+If the project enables S1199, it keeps the `else` rather than introducing a
+standalone scope. Lifted statements and comments respect explicit SA1513
+and SA1515 blank-line requirements.
 Brace removal also checks whether an enclosing `else` still needs the braces.
 
 The null-assignment rule skips ref reassignments and nullable assignments where
@@ -537,7 +599,9 @@ warning counts, comment preservation, and before/after runtime output. It also
 contains executable negative controls for unsafe transformations. The smoke tool
 loads real MSBuild projects, compares sequential and concurrent diagnostics, and
 reparses the emitted C# after each Fix All before checking it with the compiler.
-Fixed exports use fresh directories and a checked source hash manifest.
+Fixed exports preserve original source encodings and preambles. Each report
+records the hash of its export manifest; replay verifies the original and fixed
+file bytes before writing anything.
 
 For the extended native comparison, install JetBrains.ReSharper.GlobalTools
 **2026.2.3.1** in an isolated tool directory and run:
@@ -547,8 +611,11 @@ python3 scripts/verify-resharper-smoke.py --dotnet /absolute/path/to/dotnet \
   --jb /absolute/path/to/jb --work-dir /absolute/path/to/smoke-evidence
 ```
 
-This runs the matrix and pinned Dapper 2.1.66, Newtonsoft.Json 13.0.3, and Serilog
-4.0.0 projects against their selected modern target and .NET Standard 2.0.
+This runs the matrix and pinned Dapper 2.1.66, Newtonsoft.Json 13.0.3, Serilog
+4.0.0, FluentValidation 11.11.0, and Polly.Core 8.5.2. To run one library
+and the matrix, add `--project polly`; repeat `--project` to select more.
+The script compares each library against native
+ReSharper on its selected modern target and runs HooSharper on .NET Standard 2.0.
 Reports retain source/configuration/reference and assembly hashes,
 raw native findings, mapped inspection opportunities, and unmatched findings for
 source review. Native XML reports have paired capture manifests; comparison
@@ -561,8 +628,41 @@ ReSharper's own Roslyn analyzer findings are excluded from native counts.
 Different rule scope, enabled settings, and diagnostic spans require review;
 matching counts do not establish semantic parity. This test does not exercise
 interactive Rider/ReSharper quick-fix UI behavior. The extended corpus is run
-separately from ordinary CI. See the [native comparison](docs/reviews/2026-10-13-review.md)
-and the [code-fix safety review](docs/reviews/2026-11-17-review.md).
+separately from ordinary CI. See the [second review, including Polly.Core](docs/reviews/2026-11-25-second-pass.md),
+the [first November 25 comparison and
+upstream test results](docs/reviews/2026-11-25-review.md), the [original native
+comparison](docs/reviews/2026-10-13-review.md), and the [earlier code-fix safety
+review](docs/reviews/2026-11-17-review.md).
+
+To see which native findings remain after HooSharper applies its fixes, keep
+the original evidence directory and run InspectCode again on the saved edits:
+
+```bash
+python3 scripts/verify-native-after.py --before /absolute/path/to/smoke-evidence \
+  --work-dir /absolute/path/to/native-after --dotnet /absolute/path/to/dotnet \
+  --jb /absolute/path/to/jb
+```
+
+The second run rebuilds fresh pinned checkouts, verifies the exported source
+bytes, and writes both the raw post-fix XML and per-inspection before/after
+counts. Add `--project polly` to inspect one library. Native JetBrains
+warnings and hosted Roslyn analyzer warnings are counted separately.
+
+To test runtime behavior on real libraries, run the Serilog, FluentValidation,
+and Polly.Core .NET 8 suites and Dapper's SQLite, DuckDB, and wrapped-reader tests before
+and after cumulative Fix All. A Dapper reader probe also checks column mapping,
+parser reuse, and `DBNull` against each rebuilt library. The command makes fresh
+disposable clones and applies Fix All twice from each original checkout. It
+compares the two sets of rewritten files byte for byte, rebuilds the test
+projects, and compares every named outcome in the original and rewritten TRX reports.
+The [Newtonsoft.Json test verifier](tests/smoke/NewtonsoftAssemblyProbe/README.md)
+tests that library using its .NET 6 runtime and the exact native-comparison export.
+Run the four .NET 8 suites with:
+
+```bash
+python3 scripts/verify-upstream-tests.py --dotnet /path/to/sdk10/dotnet \
+  --test-dotnet /path/to/sdk8/dotnet --work-dir /new/empty/upstream-tests
+```
 
 ### Performance benchmarks
 

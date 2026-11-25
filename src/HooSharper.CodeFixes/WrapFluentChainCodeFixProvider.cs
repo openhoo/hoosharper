@@ -59,7 +59,7 @@ public sealed class WrapFluentChainCodeFixProvider : CodeFixProvider
         }
 
         var indentation = GetIndentation(containingNode, sourceText) + GetContinuationIndentation(document, expression.SyntaxTree);
-        var endOfLine = DetectEndOfLine(sourceText, expression.SpanStart);
+        var endOfLine = CodeFixTrivia.GetNewLine(document, expression.SyntaxTree, expression.SpanStart, cancellationToken);
         var endOfLineTrivia = SyntaxFactory.EndOfLine(endOfLine);
         var indentationTrivia = SyntaxFactory.Whitespace(indentation);
         var replacementDots = new SyntaxToken[dots.Count];
@@ -161,31 +161,6 @@ public sealed class WrapFluentChainCodeFixProvider : CodeFixProvider
 
         return new string(' ', indentSize);
     }
-
-    private static string DetectEndOfLine(
-        Microsoft.CodeAnalysis.Text.SourceText sourceText,
-        int position)
-    {
-        var line = sourceText.Lines.GetLineFromPosition(position);
-        var lineBreakLength = line.EndIncludingLineBreak - line.End;
-        if (lineBreakLength > 0)
-        {
-            return sourceText.ToString(new Microsoft.CodeAnalysis.Text.TextSpan(line.End, lineBreakLength));
-        }
-
-        for (var index = line.LineNumber - 1; index >= 0; index--)
-        {
-            var previous = sourceText.Lines[index];
-            lineBreakLength = previous.EndIncludingLineBreak - previous.End;
-            if (lineBreakLength > 0)
-            {
-                return sourceText.ToString(new Microsoft.CodeAnalysis.Text.TextSpan(previous.End, lineBreakLength));
-            }
-        }
-
-        return "\n";
-    }
-
 
     private static bool ContainsEndOfLine(SyntaxTriviaList trivia)
     {

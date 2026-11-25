@@ -10,6 +10,7 @@ using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Formatting;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace HooSharper.CodeFixes;
 
@@ -27,7 +28,12 @@ public sealed class UseThrowIfNullCodeFixProvider : CodeFixProvider
         var ifStatement = root?.FindToken(diagnostic.Location.SourceSpan.Start).Parent?
             .AncestorsAndSelf().OfType<IfStatementSyntax>().FirstOrDefault();
 
-        if (ifStatement is null)
+        var model = await context.Document.GetSemanticModelAsync(context.CancellationToken).ConfigureAwait(false);
+        if (ifStatement is null || model is null ||
+            UseThrowIfNullAnalyzer.GetAvailableExceptionType(model.Compilation) is not { } exceptionType ||
+            UseThrowIfNullAnalyzer.FindGuard(ifStatement, model, exceptionType, context.CancellationToken) is not { } guard ||
+            guard.Location.SourceSpan != diagnostic.Location.SourceSpan ||
+            CallerArgumentExpressionSafety.IsCaptured(ifStatement, model, context.CancellationToken))
         {
             return;
         }
@@ -35,7 +41,8 @@ public sealed class UseThrowIfNullCodeFixProvider : CodeFixProvider
         context.RegisterCodeFix(
             CodeAction.Create(
                 "Use ArgumentNullException.ThrowIfNull",
-                cancellationToken => ApplyFixAsync(context.Document, ifStatement, cancellationToken),
+                cancellationToken => ApplyFixAsync(context.Document, ifStatement, guard.Checked, guard.Creation, guard.Throw,
+                    model, exceptionType, cancellationToken),
                 nameof(UseThrowIfNullCodeFixProvider)),
             diagnostic);
     }
@@ -43,17 +50,15 @@ public sealed class UseThrowIfNullCodeFixProvider : CodeFixProvider
     private static async Task<Document> ApplyFixAsync(
         Document document,
         IfStatementSyntax ifStatement,
+        ExpressionSyntax checkedExpression,
+        ObjectCreationExpressionSyntax creation,
+        ThrowStatementSyntax throwStatement,
+        SemanticModel semanticModel,
+        INamedTypeSymbol expectedType,
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
-        if (semanticModel is null ||
-            !HooSharper.Internal.NullComparisonSafety.IsSafeNullCheck(
-                ifStatement.Condition, semanticModel, cancellationToken))
-        {
-            return document;
-        }
-        if (root is null || !TryGetParts(ifStatement, out var checkedExpression, out var creation, out var throwStatement))
+        if (root is null)
         {
             return document;
         }
@@ -74,24 +79,31 @@ public sealed class UseThrowIfNullCodeFixProvider : CodeFixProvider
 
         // A constructor name is bound as a type, but the receiver of a method
         // call may instead bind to a local or field with the same name.
-        var expectedType = semanticModel.Compilation.GetTypeByMetadataName("System.ArgumentNullException");
-        bool CallsFrameworkGuard(InvocationExpressionSyntax call) =>
+        IMethodSymbol? FrameworkGuard(InvocationExpressionSyntax call) =>
             semanticModel.GetSpeculativeSymbolInfo(ifStatement.SpanStart,
                 SyntaxFactory.ParseExpression(call.ToString()), SpeculativeBindingOption.BindAsExpression).Symbol
-                is IMethodSymbol { IsStatic: true, Parameters.Length: 2 } method &&
-            method.Parameters[0].Type.SpecialType == SpecialType.System_Object &&
-            SymbolEqualityComparer.Default.Equals(method.ContainingType, expectedType);
+                is IMethodSymbol { IsStatic: true, ReturnsVoid: true, Arity: 0, Parameters.Length: 2 } method &&
+            method.Parameters[0] is { RefKind: RefKind.None, Type.SpecialType: SpecialType.System_Object } &&
+            method.Parameters[1] is { RefKind: RefKind.None, Type.SpecialType: SpecialType.System_String } &&
+            SymbolEqualityComparer.Default.Equals(method.ContainingType, expectedType) ? method : null;
 
-        var qualify = !CallsFrameworkGuard(invocation);
-        if (qualify)
+        var target = FrameworkGuard(invocation);
+        var qualify = target is null;
+        if (target is null)
         {
             var member = (MemberAccessExpressionSyntax)invocation.Expression;
             invocation = invocation.WithExpression(member.WithExpression(
                 SyntaxFactory.ParseExpression("global::System.ArgumentNullException").WithTriviaFrom(typeExpression)));
-            if (!CallsFrameworkGuard(invocation))
-            {
+            target = FrameworkGuard(invocation);
+            if (target is null)
                 return document;
-            }
+        }
+
+        var shorter = invocation.WithArgumentList(invocation.ArgumentList.WithArguments(
+            SyntaxFactory.SingletonSeparatedList(invocation.ArgumentList.Arguments[0])));
+        if (CanOmitName(shorter, target, arguments[0].Expression, ifStatement.SpanStart, semanticModel, cancellationToken))
+        {
+            invocation = shorter;
         }
 
         var replacement = SyntaxFactory.ExpressionStatement(invocation)
@@ -124,57 +136,31 @@ public sealed class UseThrowIfNullCodeFixProvider : CodeFixProvider
             replacement = replacement.WithLeadingTrivia(leading);
         }
 
-        return document.WithSyntaxRoot(root.ReplaceNode(ifStatement, replacement));
+        return await CodeFixTrivia.FormatChangesAsync(document, root.ReplaceNode(ifStatement, replacement), cancellationToken).ConfigureAwait(false);
     }
 
-    private static bool TryGetParts(
-        IfStatementSyntax ifStatement,
-        out ExpressionSyntax checkedExpression,
-        out ObjectCreationExpressionSyntax creation,
-        out ThrowStatementSyntax throwStatement)
+    private static bool CanOmitName(InvocationExpressionSyntax shorter, IMethodSymbol target, ExpressionSyntax originalName,
+        int position, SemanticModel model, CancellationToken token)
     {
-        checkedExpression = GetCheckedExpression(ifStatement.Condition)!;
-        throwStatement = ifStatement.Statement switch
+        // A name expression may carry a handwritten comment. Keep it in place.
+        var nameParameter = target.Parameters[1];
+        if (!nameParameter.IsOptional || originalName.DescendantTrivia().Any(CodeFixTrivia.IsComment) ||
+            !nameParameter.GetAttributes().Any(a =>
+                a.AttributeClass?.ToDisplayString() == "System.Runtime.CompilerServices.CallerArgumentExpressionAttribute" &&
+                a.ConstructorArguments.Length == 1 && a.ConstructorArguments[0].Value is string parameter &&
+                parameter == target.Parameters[0].Name) ||
+            model.GetConstantValue(originalName, token) is not { HasValue: true, Value: string expected })
         {
-            ThrowStatementSyntax directThrow => directThrow,
-            BlockSyntax { Statements.Count: 1 } block when block.Statements[0] is ThrowStatementSyntax blockThrow => blockThrow,
-            _ => null!,
-        };
-        creation = throwStatement?.Expression as ObjectCreationExpressionSyntax ?? null!;
-        return checkedExpression is not null &&
-               creation?.ArgumentList is { Arguments.Count: 1 } &&
-               creation.ArgumentList.Arguments[0].NameColon is null;
-    }
-
-    private static ExpressionSyntax? GetCheckedExpression(ExpressionSyntax condition)
-    {
-        condition = WalkDownParentheses(condition);
-        if (condition is IsPatternExpressionSyntax
-            {
-                Expression: var expression,
-                Pattern: ConstantPatternSyntax { Expression.RawKind: (int)SyntaxKind.NullLiteralExpression },
-            })
-        {
-            return WalkDownParentheses(expression);
+            return false;
         }
 
-        if (condition is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.EqualsExpression } equality)
-        {
-            return equality.Left.IsKind(SyntaxKind.NullLiteralExpression)
-                ? WalkDownParentheses(equality.Right)
-                : WalkDownParentheses(equality.Left);
-        }
-
-        return null;
-    }
-
-    private static ExpressionSyntax WalkDownParentheses(ExpressionSyntax expression)
-    {
-        while (expression is ParenthesizedExpressionSyntax parenthesized)
-        {
-            expression = parenthesized.Expression;
-        }
-
-        return expression;
+        // Bind the actual shortened call. An overload, an escaped identifier, or a
+        // qualified member can change the selected method or compiler-supplied name.
+        var proposed = SyntaxFactory.ExpressionStatement(SyntaxFactory.ParseExpression(shorter.ToString()));
+        return model.TryGetSpeculativeSemanticModel(position, proposed, out var speculative) &&
+            speculative.GetOperation(proposed.Expression, token) is IInvocationOperation call &&
+            SymbolEqualityComparer.Default.Equals(call.TargetMethod, target) &&
+            call.Arguments.Any(a => a.ArgumentKind == ArgumentKind.DefaultValue && a.Parameter?.Ordinal == 1 &&
+                a.Value.ConstantValue is { HasValue: true, Value: string captured } && captured == expected);
     }
 }

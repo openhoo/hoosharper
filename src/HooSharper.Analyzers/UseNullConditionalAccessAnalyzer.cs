@@ -28,21 +28,10 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
     {
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.EnableConcurrentExecution();
-        context.RegisterCompilationStartAction(static compilationContext =>
-        {
-            var expressionType = compilationContext.Compilation.GetTypeByMetadataName(
-                "System.Linq.Expressions.Expression`1");
-            var queryableType = compilationContext.Compilation.GetTypeByMetadataName("System.Linq.IQueryable");
-            compilationContext.RegisterSyntaxNodeAction(
-                nodeContext => AnalyzeConditionalExpression(nodeContext, expressionType, queryableType),
-                SyntaxKind.ConditionalExpression);
-        });
+        context.RegisterSyntaxNodeAction(AnalyzeConditionalExpression, SyntaxKind.ConditionalExpression);
     }
 
-    private static void AnalyzeConditionalExpression(
-        SyntaxNodeAnalysisContext context,
-        INamedTypeSymbol? expressionType,
-        INamedTypeSymbol? queryableType)
+    private static void AnalyzeConditionalExpression(SyntaxNodeAnalysisContext context)
     {
         var conditional = (ConditionalExpressionSyntax)context.Node;
         if (context.Node.SyntaxTree.Options is not CSharpParseOptions parseOptions ||
@@ -50,7 +39,6 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
              parseOptions.LanguageVersion < LanguageVersion.CSharp6) ||
             !HasCandidateShape(conditional) ||
             HasDirective(conditional) ||
-            IsWithinExpressionTree(conditional, context.SemanticModel, expressionType, queryableType, context.CancellationToken) ||
             !TryGetCandidate(conditional, context.SemanticModel, context.CancellationToken,
                 out var receiver, out var access))
         {
@@ -82,7 +70,7 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        context.ReportDiagnostic(Diagnostic.Create(Rule, conditional.QuestionToken.GetLocation()));
+        context.ReportIfUncaptured(Rule, conditional.QuestionToken.GetLocation());
     }
 
     public static bool TryGetCandidate(
@@ -92,7 +80,8 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
         out ExpressionSyntax receiver,
         out ExpressionSyntax access)
     {
-        if (!TryGetNullTest(conditional.Condition, semanticModel, cancellationToken,
+        if (ExpressionTreeSafety.IsQuoted(conditional, semanticModel, cancellationToken) ||
+            !TryGetNullTest(conditional.Condition, semanticModel, cancellationToken,
                 out var testedReceiver, out var trueWhenNull))
         {
             receiver = null!;
@@ -325,37 +314,6 @@ public sealed class UseNullConditionalAccessAnalyzer : DiagnosticAnalyzer
             (trivia.IsKind(SyntaxKind.SingleLineCommentTrivia) ||
              trivia.IsKind(SyntaxKind.MultiLineCommentTrivia)) &&
             !access.FullSpan.Contains(trivia.Span));
-
-    private static bool IsWithinExpressionTree(
-        SyntaxNode node,
-        SemanticModel semanticModel,
-        INamedTypeSymbol? expressionType,
-        INamedTypeSymbol? queryableType,
-        System.Threading.CancellationToken cancellationToken)
-    {
-        for (var ancestor = node.Parent; ancestor is not null; ancestor = ancestor.Parent)
-        {
-            if (expressionType is not null &&
-                ancestor is AnonymousFunctionExpressionSyntax anonymousFunction &&
-                semanticModel.GetTypeInfo(anonymousFunction, cancellationToken).ConvertedType is
-                    INamedTypeSymbol convertedType &&
-                SymbolEqualityComparer.Default.Equals(convertedType.OriginalDefinition, expressionType))
-            {
-                return true;
-            }
-
-            if (queryableType is not null && ancestor is QueryExpressionSyntax query &&
-                semanticModel.GetTypeInfo(query, cancellationToken).Type is INamedTypeSymbol queryType &&
-                (SymbolEqualityComparer.Default.Equals(queryType.OriginalDefinition, queryableType) ||
-                 queryType.AllInterfaces.Any(type => SymbolEqualityComparer.Default.Equals(
-                     type.OriginalDefinition, queryableType))))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
 
     private static bool HasCandidateShape(ConditionalExpressionSyntax conditional)
     {

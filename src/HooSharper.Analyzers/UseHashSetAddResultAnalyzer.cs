@@ -51,9 +51,11 @@ public sealed class UseHashSetAddResultAnalyzer : DiagnosticAnalyzer
         INamedTypeSymbol equalityComparerDefinition)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
-        if (ifStatement.Else is not null ||
-            ifStatement.Statement is not BlockSyntax { Statements.Count: > 0 } block ||
-            block.Statements[0] is not ExpressionStatementSyntax
+        var firstStatement = ifStatement.Statement is BlockSyntax body
+            ? body.Statements.FirstOrDefault()
+            : ifStatement.Statement;
+        if (ifStatement.ContainsDiagnostics || ifStatement.Else is not null ||
+            firstStatement is not ExpressionStatementSyntax
             {
                 Expression: InvocationExpressionSyntax addInvocation,
             } ||
@@ -103,7 +105,7 @@ public sealed class UseHashSetAddResultAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        context.ReportDiagnostic(Diagnostic.Create(Rule, containsMember.Name.GetLocation()));
+        context.ReportIfUncaptured(Rule, containsMember.Name.GetLocation(), ifStatement);
     }
     private static bool HasProvablyPureComparer(
         IOperation? receiver,

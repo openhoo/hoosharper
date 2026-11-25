@@ -34,21 +34,7 @@ public sealed class SimplifyBooleanReturnAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
-        if (ifStatement.ContainsDiagnostics ||
-            ifStatement.Else is not null ||
-            ifStatement.ContainsDirectives ||
-            !TryGetReturnedLiteral(ifStatement.Statement, out var branchValue) ||
-            ifStatement.Parent is not BlockSyntax parentBlock)
-        {
-            return;
-        }
-
-        var index = parentBlock.Statements.IndexOf(ifStatement);
-        if (index < 0 || index + 1 >= parentBlock.Statements.Count ||
-            parentBlock.Statements[index + 1] is not ReturnStatementSyntax nextReturn ||
-            nextReturn.ContainsDirectives ||
-            !TryGetReturnedLiteral(nextReturn, out var nextValue) ||
-            branchValue == nextValue)
+        if (!TryGetReturns(ifStatement, out _, out _, out _, out _))
         {
             return;
         }
@@ -74,7 +60,33 @@ public sealed class SimplifyBooleanReturnAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        context.ReportDiagnostic(Diagnostic.Create(Rule, ifStatement.IfKeyword.GetLocation()));
+        context.ReportIfUncaptured(Rule, ifStatement.IfKeyword.GetLocation(), ifStatement);
+    }
+
+    internal static bool TryGetReturns(IfStatementSyntax ifStatement, out SyntaxList<StatementSyntax> statements,
+        out int index, out bool branchValue, out ReturnStatementSyntax nextReturn)
+    {
+        statements = ifStatement.Parent switch
+        {
+            BlockSyntax block => block.Statements,
+            SwitchSectionSyntax section => section.Statements,
+            _ => default,
+        };
+        index = statements.IndexOf(ifStatement);
+        branchValue = default;
+        nextReturn = null!;
+        if (index < 0 || index + 1 >= statements.Count ||
+            ifStatement.ContainsDiagnostics || ifStatement.ContainsDirectives || ifStatement.Else is not null ||
+            !TryGetReturnedLiteral(ifStatement.Statement, out branchValue) ||
+            statements[index + 1] is not ReturnStatementSyntax next ||
+            next.ContainsDiagnostics || next.ContainsDirectives || !TryGetReturnedLiteral(next, out var nextValue) ||
+            branchValue == nextValue)
+        {
+            return false;
+        }
+
+        nextReturn = next;
+        return true;
     }
 
     private static bool ContainsUserDefinedNot(IOperation? operation) =>

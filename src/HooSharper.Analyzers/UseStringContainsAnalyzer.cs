@@ -56,13 +56,14 @@ public sealed class UseStringContainsAnalyzer : DiagnosticAnalyzer
                 } indexOfMethod,
             } ||
             !HasMatchingContainsOverload(indexOfMethod) ||
+            ExpressionTreeSafety.IsQuoted(binaryOperation, context.SemanticModel.Compilation) ||
             HasDirective(comparison))
         {
             return;
         }
 
         var name = ((MemberAccessExpressionSyntax)invocation.Expression).Name;
-        context.ReportDiagnostic(Diagnostic.Create(Rule, name.GetLocation()));
+        context.ReportIfUncaptured(Rule, name.GetLocation());
     }
 
     private static bool TryGetIndexOfInvocation(

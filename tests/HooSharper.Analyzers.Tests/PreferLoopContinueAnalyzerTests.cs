@@ -43,7 +43,7 @@ public sealed class PreferLoopContinueAnalyzerTests
                     foreach (var value in values)
                     {
                         Prepare(value);
-                        if (!(value > 0))
+                        if (value <= 0)
                             continue;
                         Execute(value);
                         Finish(value);

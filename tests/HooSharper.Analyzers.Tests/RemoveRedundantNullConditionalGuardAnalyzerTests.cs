@@ -1,6 +1,10 @@
 using HooSharper.CodeFixes;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CodeActions;
+using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Text;
 using Microsoft.CodeAnalysis.CSharp.Testing;
 using Microsoft.CodeAnalysis.Testing;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
@@ -11,6 +15,75 @@ namespace HooSharper.Analyzers.Tests;
 
 public sealed class RemoveRedundantNullConditionalGuardAnalyzerTests
 {
+    [Theory]
+    [InlineData("second?.ToString();")]
+    [InlineData("first.ToString();")]
+    public async Task ChangedBodyDoesNotOfferAStaleFix(string body)
+    {
+        var source = $"class C {{ void Use(object first, object second) {{ if (first != null) {{ {body} }} }} }}";
+        var token = TestContext.Current.CancellationToken;
+        using var workspace = new AdhocWorkspace();
+        var document = workspace.AddProject("ChangedBody", LanguageNames.CSharp)
+            .WithCompilationOptions(new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary))
+            .AddMetadataReference(MetadataReference.CreateFromFile(typeof(object).Assembly.Location))
+            .AddDocument("Example.cs", SourceText.From(source));
+        var node = (await document.GetSyntaxRootAsync(token))!.DescendantNodes().OfType<BinaryExpressionSyntax>().Single();
+        var diagnostic = Diagnostic.Create(new RemoveRedundantNullConditionalGuardAnalyzer().SupportedDiagnostics.Single(),
+            node.OperatorToken.GetLocation());
+        var actions = new List<CodeAction>();
+        await new RemoveRedundantNullConditionalGuardCodeFixProvider().RegisterCodeFixesAsync(
+            new CodeFixContext(document, diagnostic, (action, _) => actions.Add(action), token));
+        Assert.Empty(actions);
+    }
+
+    [Fact]
+    public Task RemovesUnbracedGuardAndPreservesComments()
+    {
+        const string source = """
+            using System;
+            class Example
+            {
+                void Run(Action? work, bool needed)
+                {
+                    if (needed)
+                        if (work {|#0:is|} not null) // guard
+                            work?.Invoke(); // call
+                }
+            }
+            """;
+        const string expected = """
+            using System;
+            class Example
+            {
+                void Run(Action? work, bool needed)
+                {
+                    if (needed)
+                        // guard
+                        work?.Invoke(); // call
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source, VerifyCS.Diagnostic(RemoveRedundantNullConditionalGuardAnalyzer.DiagnosticId).WithLocation(0), expected);
+    }
+
+    [Fact]
+    public Task KeepsUnbracedGuardWhenAnOutVariableWouldHideAField()
+    {
+        const string source = """
+            class C
+            {
+                int value;
+                void Read(out int result) => result = 1;
+                int Run(C? other)
+                {
+                    if (other != null) other?.Read(out var value);
+                    return value;
+                }
+            }
+            """;
+        return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
     [Fact]
     public Task RemovesIsNotNullGuardAroundInvocation()
     {

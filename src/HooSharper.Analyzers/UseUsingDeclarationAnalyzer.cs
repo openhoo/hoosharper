@@ -38,6 +38,6 @@ public sealed class UseUsingDeclarationAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        context.ReportDiagnostic(Diagnostic.Create(Rule, usingStatement.UsingKeyword.GetLocation()));
+        context.ReportIfUncaptured(Rule, usingStatement.UsingKeyword.GetLocation(), usingStatement);
     }
 }

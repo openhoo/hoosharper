@@ -9,6 +9,90 @@ namespace HooSharper.Analyzers.Tests;
 
 public sealed class WrapFluentChainAnalyzerTests
 {
+    private const string MultiLineChildPolicy = "hoosharper_max_line_length = 35\ndotnet_diagnostic.SA1519.severity = warning";
+
+    [Theory]
+    [InlineData("if (flag)")]
+    [InlineData("if (flag) return; else")]
+    [InlineData("while (flag)")]
+    [InlineData("for (; flag;)")]
+    [InlineData("foreach (var item in value)")]
+    [InlineData("lock (value)")]
+    public Task KeepsSingleLineUnbracedChildUnderExplicitPolicy(string control)
+    {
+        var source = "class C { void Run(bool flag, string value) {\n" +
+            "    " + control + "\n        value = value.Trim().ToUpperInvariant().PadRight(200);\n} }";
+        return VerifyAnalyzerWithConfigAsync(source, MultiLineChildPolicy);
+    }
+
+    [Fact]
+    public Task KeepsSingleLineNestedControlUnderExplicitPolicy()
+    {
+        const string source = """
+            class C
+            {
+                void Run(bool flag, string value)
+                {
+                    if (flag)
+                        while (flag) { value = value.Trim().ToUpperInvariant().PadRight(200); }
+                }
+            }
+            """;
+        return VerifyAnalyzerWithConfigAsync(source, MultiLineChildPolicy);
+    }
+
+    [Fact]
+    public Task WrapsChainInsideBracedChildUnderExplicitPolicy()
+    {
+        const string source = """
+            class C
+            {
+                void Run(bool flag, string value)
+                {
+                    if (flag)
+                    {
+                        value = {|#0:value.Trim().ToUpperInvariant().PadRight(200)|};
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class C
+            {
+                void Run(bool flag, string value)
+                {
+                    if (flag)
+                    {
+                        value = value
+                            .Trim()
+                            .ToUpperInvariant()
+                            .PadRight(200);
+                    }
+                }
+            }
+            """;
+        return VerifyWithConfigAsync(source, fixedSource,
+            VerifyCS.Diagnostic(WrapFluentChainAnalyzer.DiagnosticId).WithLocation(0), MultiLineChildPolicy);
+    }
+
+    [Fact]
+    public Task WrapsUnbracedChildWithDisabledPolicy()
+    {
+        const string source = """
+            class C
+            {
+                void Run(bool flag, string value)
+                {
+                    if (flag)
+                        value = {|#0:value.Trim().ToUpperInvariant().PadRight(200)|};
+                }
+            }
+            """;
+        return VerifyAnalyzerWithConfigAsync(source,
+            VerifyCS.Diagnostic(WrapFluentChainAnalyzer.DiagnosticId).WithLocation(0),
+            "hoosharper_max_line_length = 35\ndotnet_diagnostic.SA1519.severity = none");
+    }
+
     [Fact]
     public Task WrapsChainInsideSingleLineRawStringInterpolation()
     {

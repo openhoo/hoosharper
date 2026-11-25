@@ -1,4 +1,6 @@
 using HooSharper.CodeFixes;
+using Microsoft.CodeAnalysis.CSharp.Testing;
+using Microsoft.CodeAnalysis.Testing;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
     HooSharper.Analyzers.OmitBracesForSingleLineIfAnalyzer,
     HooSharper.CodeFixes.OmitBracesForSingleLineIfCodeFixProvider>;
@@ -7,6 +9,66 @@ namespace HooSharper.Analyzers.Tests;
 
 public sealed class OmitBracesForSingleLineIfAnalyzerTests
 {
+    [Fact]
+    public Task FixAllKeepsIndependentCaseBlockLayouts()
+    {
+        const string source = """
+            class C
+            {
+                int Read(int n, bool ready)
+                {
+                    switch (n)
+                    {
+                        case 1:
+                        {
+                            if (ready)
+                            {|#0:{|}
+                                return 10;
+                            }
+                            break;
+                        }
+                        case 2:
+                            {
+                                if (ready)
+                                {|#1:{|}
+                                    return 20;
+                                }
+                                break;
+                            }
+                    }
+                    return 0;
+                }
+            }
+            """;
+        const string expected = """
+            class C
+            {
+                int Read(int n, bool ready)
+                {
+                    switch (n)
+                    {
+                        case 1:
+                        {
+                            if (ready)
+                                return 10;
+                            break;
+                        }
+                        case 2:
+                            {
+                                if (ready)
+                                    return 20;
+                                break;
+                            }
+                    }
+                    return 0;
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            [VerifyCS.Diagnostic(OmitBracesForSingleLineIfAnalyzer.DiagnosticId).WithLocation(0),
+             VerifyCS.Diagnostic(OmitBracesForSingleLineIfAnalyzer.DiagnosticId).WithLocation(1)], expected, expected);
+    }
+
     [Fact]
     public Task RemovesBracesFromSingleStatementIf()
     {
@@ -660,5 +722,30 @@ public sealed class OmitBracesForSingleLineIfAnalyzerTests
             """;
         var expected = VerifyCS.Diagnostic(OmitBracesForSingleLineIfAnalyzer.DiagnosticId).WithLocation(0);
         return VerifyCS.VerifyCodeFixAsync(source, new[] { expected }, fixedSource, fixedSource);
+    }
+
+    [Fact]
+    public async Task FixAllRemovesOverlappingNestedBracesInOnePass()
+    {
+        const string source = "class C {\r\n\tvoid Run(bool a, bool b) {\r\n"
+            + "\t\tif (a) {|#0:{|}\r\n\t\t\tif (b) {|#1:{|}\r\n\t\t\t\tRun(false, false);\r\n\t\t\t}\r\n\t\t}\r\n"
+            + "\t\tif (b) {|#2:{|}\r\n\t\t\tRun(false, true);\r\n\t\t}\r\n\t}\r\n}\r\n";
+        const string fixedSource = "class C {\r\n\tvoid Run(bool a, bool b) {\r\n"
+            + "\t\tif (a) if (b) Run(false, false);\r\n\t\tif (b) Run(false, true);\r\n\t}\r\n}\r\n";
+        var test = new CSharpCodeFixTest<OmitBracesForSingleLineIfAnalyzer,
+            OmitBracesForSingleLineIfCodeFixProvider, DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = source,
+            FixedCode = fixedSource,
+            BatchFixedCode = fixedSource,
+            NumberOfIncrementalIterations = 3,
+            NumberOfFixAllIterations = 1,
+        };
+        test.TestState.AnalyzerConfigFiles.Add(("/.editorconfig",
+            "root = true\n[*.cs]\nindent_style = tab\ntab_width = 2\nindent_size = tab\nend_of_line = crlf\ncsharp_new_line_before_open_brace = none\n"));
+        for (var i = 0; i < 3; i++)
+            test.ExpectedDiagnostics.Add(VerifyCS.Diagnostic(OmitBracesForSingleLineIfAnalyzer.DiagnosticId).WithLocation(i));
+        await test.RunAsync(TestContext.Current.CancellationToken);
     }
 }

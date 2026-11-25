@@ -62,6 +62,9 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Pack from a clean checkout
+        run: dotnet pack src/HooSharper.Analyzers/HooSharper.Analyzers.csproj -c Release --artifacts-path "$RUNNER_TEMP/pack-build" -o artifacts
+
       - name: Restore
         run: dotnet restore HooSharper.slnx
 
@@ -103,9 +106,6 @@ jobs:
         run: >-
           dotnet run --project benchmarks/HooSharper.Performance/HooSharper.Performance.csproj
           -c Release --no-build -- --validate-fixtures
-
-      - name: Pack
-        run: dotnet pack src/HooSharper.Analyzers/HooSharper.Analyzers.csproj -c Release --no-build -o artifacts
 
       - name: Verify package contents
         run: python3 scripts/verify-package.py artifacts/HooSharper.Analyzers.*.nupkg

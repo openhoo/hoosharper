@@ -393,7 +393,7 @@ public sealed class MergeNestedIfAnalyzerTests
     }
 
     [Fact]
-    public Task DoesNotReportElseOrUnbracedOuterOrMultipleStatements()
+    public Task DoesNotReportElseOrMultipleStatements()
     {
         const string source = """
             class Example
@@ -409,10 +409,6 @@ public sealed class MergeNestedIfAnalyzerTests
                     {
                         Finish();
                     }
-
-                    if (first)
-                        if (second)
-                            Execute();
 
                     if (first)
                     {
@@ -437,6 +433,74 @@ public sealed class MergeNestedIfAnalyzerTests
             """;
 
         return VerifyCS.VerifyAnalyzerAsync(source);
+    }
+
+    [Fact]
+    public Task MergesAfterBraceRemovalAndKeepsBodyCommentOnce()
+    {
+        const string source = """
+            class C
+            {
+                void Run(bool a, bool b, bool c)
+                {
+                    {|#0:if|} (a)
+                        if (b)
+                        {
+                            if (c)
+                                Run(false, false, false); // keep
+                        }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class C
+            {
+                void Run(bool a, bool b, bool c)
+                {
+                    if (a && b && c)
+                        Run(false, false, false); // keep
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(MergeNestedIfAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+    [Fact]
+    public Task MergesInnerOrdinaryConditionsBelowUserDefinedGuard()
+    {
+        const string source = """
+            class C
+            {
+                public static bool operator true(C value) => true;
+                public static bool operator false(C value) => false;
+                void Run(C outer, bool a, bool b)
+                {
+                    if (outer)
+                    {
+                        {|#0:if|} (a)
+                            if (b) return;
+                    }
+                }
+            }
+            """;
+        const string fixedSource = """
+            class C
+            {
+                public static bool operator true(C value) => true;
+                public static bool operator false(C value) => false;
+                void Run(C outer, bool a, bool b)
+                {
+                    if (outer)
+                    {
+                        if (a && b)
+                            return;
+                    }
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(MergeNestedIfAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
     }
 
     [Fact]

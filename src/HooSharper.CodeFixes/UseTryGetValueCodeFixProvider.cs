@@ -89,7 +89,7 @@ public sealed class UseTryGetValueCodeFixProvider : CodeFixProvider
             .WithStatement(updatedBody)
             .WithAdditionalAnnotations(Formatter.Annotation);
 
-        return document.WithSyntaxRoot(root.ReplaceNode(ifStatement, updatedIf));
+        return await CodeFixTrivia.FormatChangesAsync(document, root.ReplaceNode(ifStatement, updatedIf), cancellationToken).ConfigureAwait(false);
     }
 
     private static ExpressionSyntax RewriteAccess(

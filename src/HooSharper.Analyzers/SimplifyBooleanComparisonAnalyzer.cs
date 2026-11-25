@@ -51,7 +51,30 @@ public sealed class SimplifyBooleanComparisonAnalyzer : DiagnosticAnalyzer
         model.GetOperation(comparison, token) is IBinaryOperation { OperatorMethod: null } operation &&
         IsBooleanOperand(operation.LeftOperand) && IsBooleanOperand(operation.RightOperand) &&
         operation.Type?.SpecialType == SpecialType.System_Boolean && !ContainsUserDefinedNot(operation) &&
-        HasIndependentBooleanType(operand, model, comparison.SpanStart);
+        HasIndependentBooleanType(operand, model, comparison.SpanStart) &&
+        !CouldExposeStorage(comparison, operand, operation) &&
+        !ExpressionTreeSafety.IsQuoted(operation, model.Compilation) &&
+        !CallerArgumentExpressionSafety.IsCaptured(comparison, model, token);
+
+    // An in/ref readonly argument can accept a temporary. Simplifying the
+    // comparison to a variable would instead pass the variable's storage.
+    private static bool CouldExposeStorage(BinaryExpressionSyntax comparison, ExpressionSyntax operand, IOperation operation)
+    {
+        while (operation.Parent is IParenthesizedOperation parent)
+            operation = parent;
+        if (operation.Parent is not IArgumentOperation { Parameter.RefKind: not RefKind.None })
+            return false;
+
+        // Negating an expression still makes a value, unless the fixer can
+        // cancel an existing !. Keep that case a temporary as well.
+        var literal = comparison.Left == operand ? comparison.Right : comparison.Left;
+        if (comparison.IsKind(SyntaxKind.EqualsExpression) == literal.IsKind(SyntaxKind.TrueLiteralExpression))
+            return true;
+
+        while (operand is ParenthesizedExpressionSyntax parentheses)
+            operand = parentheses.Expression;
+        return operand.IsKind(SyntaxKind.LogicalNotExpression);
+    }
 
     // Removing == true (or !) must leave a bool even when overload resolution
     // no longer supplies a target type, as with Pick(default == true).

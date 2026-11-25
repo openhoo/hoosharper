@@ -46,6 +46,7 @@ public sealed class UseStringContainsCodeFixProvider : CodeFixProvider
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
         var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
         if (root is null || semanticModel is null ||
+            ExpressionTreeSafety.IsQuoted(comparison, semanticModel, cancellationToken) ||
             !TryGetInvocationAndResult(comparison, semanticModel, cancellationToken, out var invocation, out var found))
         {
             return document;

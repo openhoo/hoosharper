@@ -39,6 +39,83 @@ public sealed class SimplifyBooleanReturnAnalyzerTests
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
     }
 
+    [Theory]
+    [InlineData("if (ready) return true; // use fast path")]
+    [InlineData("if (ready) { return true; } // use fast path")]
+    public Task PreservesCommentAfterFirstReturn(string branch)
+    {
+        var source = $$"""
+            class Example
+            {
+                bool Run(bool ready)
+                {
+                    {{branch.Replace("if", "{|#0:if|}")}}
+                    return false;
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Example
+            {
+                bool Run(bool ready)
+                {
+                    return ready;
+                    // use fast path
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(SimplifyBooleanReturnAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+    [Fact]
+    public Task SimplifiesOppositeReturnsInsideSwitchSections()
+    {
+        const string before = """
+            using System.Reflection;
+            class Example
+            {
+                bool CanSet(MemberInfo member, bool nonPublic)
+                {
+                    switch (member)
+                    {
+                        case FieldInfo field:
+                            if (nonPublic) return true;
+                            {|#0:if|} (field.IsPublic) { return true; }
+                            return false;
+                        case PropertyInfo property:
+                            {|#1:if|} (property.CanWrite) return false;
+                            return true;
+                        default:
+                            return false;
+                    }
+                }
+            }
+            """;
+        const string after = """
+            using System.Reflection;
+            class Example
+            {
+                bool CanSet(MemberInfo member, bool nonPublic)
+                {
+                    switch (member)
+                    {
+                        case FieldInfo field:
+                            if (nonPublic) return true;
+                            return field.IsPublic;
+                        case PropertyInfo property:
+                            return !property.CanWrite;
+                        default:
+                            return false;
+                    }
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(before,
+            [VerifyCS.Diagnostic(SimplifyBooleanReturnAnalyzer.DiagnosticId).WithLocation(0),
+             VerifyCS.Diagnostic(SimplifyBooleanReturnAnalyzer.DiagnosticId).WithLocation(1)], after, after);
+    }
+
     [Fact]
     public Task SimplifiesBracedBranchAndPreservesComments()
     {

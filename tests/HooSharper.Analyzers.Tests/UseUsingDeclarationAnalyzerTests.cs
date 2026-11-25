@@ -766,6 +766,32 @@ public sealed class UseUsingDeclarationAnalyzerTests
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
     }
     [Fact]
+    public Task OneFixAllKeepsIndependentUsingBodiesAndTheirValues()
+    {
+        // Similar methods in one file must not make a batch edit move or drop a value.
+        static string Source(bool fixedCode)
+        {
+            var methods = Enumerable.Range(0, 8).Select(i =>
+                $"    void Run{i}()\r\n    {{\r\n" + (fixedCode
+                    ? $"        using var stream = new System.IO.MemoryStream();\r\n        stream.WriteByte({i});\r\n"
+                    : $"        {{|#{i}:using|}} (var stream = new System.IO.MemoryStream())\r\n        {{\r\n            stream.WriteByte({i});\r\n        }}\r\n") +
+                "    }\r\n");
+            return "class Example\r\n{\r\n" + string.Concat(methods) + "}\r\n";
+        }
+
+        var test = new CSharpCodeFixTest<UseUsingDeclarationAnalyzer, UseUsingDeclarationCodeFixProvider, DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100,
+            TestCode = Source(false),
+            FixedCode = Source(true),
+            NumberOfFixAllIterations = 1,
+        };
+        test.ExpectedDiagnostics.AddRange(Enumerable.Range(0, 8).Select(i =>
+            VerifyCS.Diagnostic(UseUsingDeclarationAnalyzer.DiagnosticId).WithLocation(i)));
+        return test.RunAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public Task FixAllConvertsNestedTerminalUsingStatements()
     {
         const string source = """

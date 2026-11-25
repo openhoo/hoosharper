@@ -56,7 +56,7 @@ public sealed class UseTryGetValueAnalyzer : DiagnosticAnalyzer
         {
             var invocation = (InvocationExpressionSyntax)ifStatement.Condition;
             var member = (MemberAccessExpressionSyntax)invocation.Expression;
-            context.ReportDiagnostic(Diagnostic.Create(Rule, member.Name.GetLocation()));
+            context.ReportIfUncaptured(Rule, member.Name.GetLocation(), ifStatement);
         }
     }
 

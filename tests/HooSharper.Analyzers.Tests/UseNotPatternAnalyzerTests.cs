@@ -98,7 +98,7 @@ public sealed class UseNotPatternAnalyzerTests
     }
 
     [Fact]
-    public Task ParenthesizesAlreadyNegatedPattern()
+    public Task CancelsAlreadyNegatedPattern()
     {
         const string source = """
             class Example
@@ -109,12 +109,50 @@ public sealed class UseNotPatternAnalyzerTests
         const string fixedSource = """
             class Example
             {
-                bool Run(object value) => value is not (not string);
+                bool Run(object value) => value is string;
             }
             """;
 
         var expected = VerifyCS.Diagnostic(UseNotPatternAnalyzer.DiagnosticId).WithLocation(0);
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Theory]
+    [InlineData("not null", "null")]
+    [InlineData("not System.String", "System.String")]
+    [InlineData("not System.ConsoleColor.Black", "System.ConsoleColor.Black")]
+    [InlineData("(not (1 or 2))", "1 or 2")]
+    [InlineData("not (not (1 or 2))", "not (1 or 2)")]
+    [InlineData("not /* guard */ (1 or 2 /* choices */)", "/* guard */ 1 or 2 /* choices */")]
+    public Task CancelsRepeatedNegationsWithoutLosingPatternTrivia(string pattern, string expectedPattern)
+    {
+        var source = "class C { bool Run(object value) => {|#0:!|}(value is " + pattern + "); }";
+        var expected = "class C { bool Run(object value) => value is " + expectedPattern + "; }";
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(UseNotPatternAnalyzer.DiagnosticId).WithLocation(0), expected);
+    }
+
+    [Fact]
+    public Task KeepsLineCommentsAndTokenBoundariesWhenRemovingNot()
+    {
+        const string source = """
+            class C
+            {
+                bool Run(object value) => {|#0:!|}(value is(not // guard
+                    null // fallback
+                    ));
+            }
+            """;
+        const string fixedSource = """
+            class C
+            {
+                bool Run(object value) => value is // guard
+                    null // fallback
+                    ;
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(UseNotPatternAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
     }
 
     [Fact]
@@ -687,7 +725,7 @@ public sealed class UseNotPatternAnalyzerTests
         const string fixedSource = """
             class C
             {
-                bool Nested(object value) => value is not (not string);
+                bool Nested(object value) => value is string;
                 object Box(object value) => (object)(value is not string);
             }
             """;

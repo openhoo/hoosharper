@@ -1,7 +1,11 @@
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CodeActions;
+using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp;
-
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.CSharp.Testing;
 using Microsoft.CodeAnalysis.Testing;
+using Microsoft.CodeAnalysis.Text;
 
 using HooSharper.CodeFixes;
 using VerifyCS = HooSharper.Analyzers.Tests.AnalyzerVerifier<
@@ -12,6 +16,136 @@ namespace HooSharper.Analyzers.Tests;
 
 public sealed class UseThrowIfNullAnalyzerTests
 {
+    [Fact]
+    public Task OmitsMatchingLiteralButPreservesEscapedParameterNameInFixAll()
+    {
+        const string source = """
+            using System;
+            class C
+            {
+                void Save(object info, object @class)
+                {
+                    if (info {|#0:==|} null) throw new ArgumentNullException("info");
+                    if (@class {|#1:is|} null) throw new ArgumentNullException(@"class");
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System;
+            class C
+            {
+                void Save(object info, object @class)
+                {
+                    ArgumentNullException.ThrowIfNull(info);
+                    ArgumentNullException.ThrowIfNull(@class, @"class");
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            [VerifyCS.Diagnostic(UseThrowIfNullAnalyzer.DiagnosticId).WithLocation(0),
+             VerifyCS.Diagnostic(UseThrowIfNullAnalyzer.DiagnosticId).WithLocation(1)],
+            fixedSource, fixedSource);
+    }
+
+    [Fact]
+    public Task KeepsNameWhenShorterCallWouldChangeOverload()
+    {
+        const string source = """
+            namespace System
+            {
+                class ArgumentNullException : Exception
+                {
+                    public ArgumentNullException(string name) { }
+                    public static void ThrowIfNull(object value, [Runtime.CompilerServices.CallerArgumentExpression("value")] string name = null) { }
+                    public static void ThrowIfNull(string value) { }
+                }
+            }
+            class C
+            {
+                void Run(string x)
+                {
+                    if (x {|#0:is|} null) throw new System.ArgumentNullException(nameof(x));
+                }
+            }
+            """;
+        return VerifyCodeFixForDottedExceptionTypeAsync(source,
+            [VerifyCS.Diagnostic(UseThrowIfNullAnalyzer.DiagnosticId).WithLocation(0)],
+            source.Replace("if (x {|#0:is|} null) throw new System.ArgumentNullException(nameof(x));",
+                "System.ArgumentNullException.ThrowIfNull(x, nameof(x));"));
+    }
+
+    [Fact]
+    public Task KeepsNameOfWithAnInteriorComment()
+    {
+        const string source = """
+            using System;
+            class C
+            {
+                void Run(object x)
+                {
+                    if (x {|#0:is|} null) throw new ArgumentNullException(nameof(/* keep */ x));
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(UseThrowIfNullAnalyzer.DiagnosticId).WithLocation(0),
+            source.Replace("if (x {|#0:is|} null) throw new ArgumentNullException(nameof(/* keep */ x));",
+                "ArgumentNullException.ThrowIfNull(x, nameof(/* keep */ x));"));
+    }
+
+    [Theory]
+    [InlineData("object value, string name = null")]
+    [InlineData("object value, string name")]
+    [InlineData("object value, [System.Runtime.CompilerServices.CallerArgumentExpression(\"other\")] string name = null")]
+    public Task KeepsExplicitNameWithoutMatchingCallerInfo(string parameters)
+    {
+        var source = $$"""
+            namespace System
+            {
+                class ArgumentNullException : Exception
+                {
+                    public ArgumentNullException(string name) { }
+                    public static void ThrowIfNull({{parameters}}) { }
+                }
+            }
+            class C
+            {
+                void Run(object x)
+                {
+                    if (x {|#0:is|} null) throw new System.ArgumentNullException(nameof(x));
+                }
+            }
+            """;
+        return VerifyCodeFixForDottedExceptionTypeAsync(source,
+            [VerifyCS.Diagnostic(UseThrowIfNullAnalyzer.DiagnosticId).WithLocation(0)],
+            source.Replace("if (x {|#0:is|} null) throw new System.ArgumentNullException(nameof(x));",
+                "System.ArgumentNullException.ThrowIfNull(x, nameof(x));"));
+    }
+
+    [Theory]
+    [InlineData("new ArgumentNullException(\"Info\")")]
+    [InlineData("new ArgumentNullException(nameof(other))")]
+    [InlineData("new ArgumentNullException(\"info\", \"message\")")]
+    [InlineData("new Exception(\"info\")")]
+    public async Task MismatchedGuardOffersNeitherDiagnosticNorStaleFix(string exception)
+    {
+        var source = $"using System; class C {{ void Save(object info, object other) {{ if (info == null) throw {exception}; }} }}";
+        await VerifyCS.VerifyAnalyzerAsync(source);
+        var token = TestContext.Current.CancellationToken;
+        using var workspace = new AdhocWorkspace();
+        var document = workspace.AddProject("StaleGuard", LanguageNames.CSharp)
+            .WithCompilationOptions(new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary))
+            .AddMetadataReference(MetadataReference.CreateFromFile(typeof(object).Assembly.Location))
+            .AddDocument("Test.cs", SourceText.From(source));
+        var root = (await document.GetSyntaxRootAsync(token))!;
+        var op = root.DescendantNodes().OfType<BinaryExpressionSyntax>().Single().OperatorToken;
+        var diagnostic = Diagnostic.Create(new UseThrowIfNullAnalyzer().SupportedDiagnostics.Single(), op.GetLocation());
+        var actions = new List<CodeAction>();
+        await new UseThrowIfNullCodeFixProvider().RegisterCodeFixesAsync(
+            new CodeFixContext(document, diagnostic, (action, _) => actions.Add(action), token));
+        Assert.Empty(actions);
+    }
+
     [Fact]
     public Task ConvertsIsNullBlockGuard()
     {
@@ -36,7 +170,7 @@ public sealed class UseThrowIfNullAnalyzerTests
             {
                 void Run(object argument)
                 {
-                    ArgumentNullException.ThrowIfNull(argument, nameof(argument));
+                    ArgumentNullException.ThrowIfNull(argument);
                 }
             }
             """;
@@ -69,7 +203,7 @@ public sealed class UseThrowIfNullAnalyzerTests
             {
                 void Run(object argument)
                 {
-                    ArgumentNullException.ThrowIfNull(argument, nameof(argument));
+                    ArgumentNullException.ThrowIfNull(argument);
                 }
             }
             """;
@@ -96,7 +230,7 @@ public sealed class UseThrowIfNullAnalyzerTests
             {
                 void Run(object argument)
                 {
-                    System.ArgumentNullException.ThrowIfNull(argument, nameof(argument));
+                    System.ArgumentNullException.ThrowIfNull(argument);
                 }
             }
             """;
@@ -133,7 +267,7 @@ public sealed class UseThrowIfNullAnalyzerTests
                 {
                     // Validate public input.
                     // Keep the parameter name stable.
-                    ArgumentNullException.ThrowIfNull(argument, nameof(argument));
+                    ArgumentNullException.ThrowIfNull(argument);
                 }
             }
             """;
@@ -169,9 +303,9 @@ public sealed class UseThrowIfNullAnalyzerTests
             {
                 void Run(object first, string second)
                 {
-                    ArgumentNullException.ThrowIfNull(first, nameof(first));
+                    ArgumentNullException.ThrowIfNull(first);
 
-                    ArgumentNullException.ThrowIfNull(second, nameof(second));
+                    ArgumentNullException.ThrowIfNull(second);
                 }
             }
             """;
@@ -208,7 +342,7 @@ public sealed class UseThrowIfNullAnalyzerTests
             {
                 void Run(object argument)
                 {
-                    ANE.ThrowIfNull(argument, nameof(argument));
+                    ANE.ThrowIfNull(argument);
                 }
             }
             """;
@@ -245,7 +379,7 @@ public sealed class UseThrowIfNullAnalyzerTests
                 void Run(object argument)
                 {
                     /* guard */
-                    System.ArgumentNullException.ThrowIfNull(argument, nameof(argument));
+                    System.ArgumentNullException.ThrowIfNull(argument);
                 }
             }
             """;
@@ -466,7 +600,7 @@ public sealed class UseThrowIfNullAnalyzerTests
             {
                 void Run(object? argument)
                 {
-                    ArgumentNullException.ThrowIfNull(argument, nameof(argument));
+                    ArgumentNullException.ThrowIfNull(argument);
                 }
             }
             """;
@@ -728,8 +862,8 @@ public sealed class UseThrowIfNullAnalyzerTests
                 void Run(object? x)
                 {
                     var ArgumentNullException = new Other();
-                    global::System.ArgumentNullException.ThrowIfNull(x, nameof(x)); // inner
-                                                                                    // outer
+                    global::System.ArgumentNullException.ThrowIfNull(x); // inner
+                                                                         // outer
                 }
             }
             """;

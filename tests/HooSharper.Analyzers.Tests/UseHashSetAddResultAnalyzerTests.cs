@@ -605,4 +605,37 @@ public sealed class UseHashSetAddResultAnalyzerTests
         return VerifyCS.VerifyAnalyzerAsync(source);
     }
 
+
+    [Fact]
+    public Task RewritesBracelessAddUnderEnclosingIfAndPreservesComments()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            class C
+            {
+                void Run(bool enabled, int value)
+                {
+                    var items = new HashSet<int>();
+                    if (enabled)
+                        if (!items.{|#0:Contains|}(value)) // guard
+                            items./* insertion */Add(value); // after
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+            class C
+            {
+                void Run(bool enabled, int value)
+                {
+                    var items = new HashSet<int>();
+                    if (enabled)
+                        // guard
+                        items./* insertion */Add(value); // after
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(UseHashSetAddResultAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
 }

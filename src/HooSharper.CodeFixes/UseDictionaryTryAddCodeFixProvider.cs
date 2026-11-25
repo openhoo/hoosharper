@@ -45,6 +45,8 @@ public sealed class UseDictionaryTryAddCodeFixProvider : CodeFixProvider
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        var block = ifStatement.Statement as BlockSyntax;
+        var firstStatement = block is null ? ifStatement.Statement : block.Statements.FirstOrDefault();
         if (root is null ||
             ifStatement.Condition is not PrefixUnaryExpressionSyntax
             {
@@ -53,14 +55,24 @@ public sealed class UseDictionaryTryAddCodeFixProvider : CodeFixProvider
                     Expression: MemberAccessExpressionSyntax containsMember,
                 } containsInvocation,
             } ||
-            ifStatement.Statement is not BlockSyntax { Statements.Count: > 0 } block ||
-            block.Statements[0] is not ExpressionStatementSyntax
+            firstStatement is not ExpressionStatementSyntax
             {
                 Expression: InvocationExpressionSyntax addInvocation,
             } addStatement ||
+            addInvocation.Expression is not MemberAccessExpressionSyntax addMember ||
             addInvocation.ArgumentList.Arguments.Count != 2)
         {
             return document;
+        }
+
+        if (block is null)
+        {
+            // The whole guard is removed. Keep the Add call itself so its
+            // receiver, named arguments, and comments remain in their original order.
+            var tryAdd = addInvocation.WithExpression(addMember.WithName(
+                SyntaxFactory.IdentifierName("TryAdd").WithTriviaFrom(addMember.Name)));
+            var replacement = CodeFixTrivia.UnwrapEmbeddedStatement(document, ifStatement, addStatement.WithExpression(tryAdd), cancellationToken);
+            return await CodeFixTrivia.FormatChangesAsync(document, root.ReplaceNode(ifStatement, replacement), cancellationToken).ConfigureAwait(false);
         }
 
         var tryAddInvocation = containsInvocation
@@ -94,7 +106,7 @@ public sealed class UseDictionaryTryAddCodeFixProvider : CodeFixProvider
                 .WithLeadingTrivia(leadingTrivia)
                 .WithTrailingTrivia(trailingTrivia)
                 .WithAdditionalAnnotations(Formatter.Annotation);
-            return document.WithSyntaxRoot(root.ReplaceNode(ifStatement, replacement));
+            return await CodeFixTrivia.FormatChangesAsync(document, root.ReplaceNode(ifStatement, replacement), cancellationToken).ConfigureAwait(false);
         }
 
         var conditionLeadingTrivia = ConditionComments(ifStatement.Condition.DescendantTrivia(descendIntoTrivia: true)
@@ -115,7 +127,7 @@ public sealed class UseDictionaryTryAddCodeFixProvider : CodeFixProvider
             .WithCondition(updatedCondition)
             .WithStatement(updatedBlock)
             .WithAdditionalAnnotations(Formatter.Annotation);
-        return document.WithSyntaxRoot(root.ReplaceNode(ifStatement, updatedIf));
+        return await CodeFixTrivia.FormatChangesAsync(document, root.ReplaceNode(ifStatement, updatedIf), cancellationToken).ConfigureAwait(false);
     }
 
     private static SyntaxTriviaList CommentLines(SyntaxTriviaList trivia)

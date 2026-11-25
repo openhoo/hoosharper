@@ -47,7 +47,7 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
             HasBoundaryOnLeftSpine(chain) ||
             !HasInvocation(chain, context) ||
             !IsSupportedLanguageVersion(chain, isInInterpolation, context) ||
-            !TryGetChainDotCount(chain, out var dotCount) ||
+            !TryGetChainDotCount(chain, out var dotCount, out var firstMember) ||
             dotCount < 2)
         {
             return;
@@ -61,12 +61,44 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
 
         var options = context.Options.AnalyzerConfigOptionsProvider.GetOptions(context.Node.SyntaxTree);
         var maximumLineLength = GetMaximumLineLength(options);
-        if (GetVisualEndColumn(chain, GetTabWidth(options)) <= maximumLineLength)
+        if (GetVisualEndColumn(chain, GetTabWidth(options)) <= maximumLineLength ||
+            (ProjectStylePolicy.IsEnabled(context.Compilation.Options, chain.SyntaxTree, "SA1519", context.CancellationToken) &&
+             WouldSplitUnbracedChild(chain, context)))
+        {
+            return;
+        }
+
+        // A call in the middle of the chain can capture its receiver. Any
+        // captured part of this spine that contains a dot contains the first one.
+        if (CallerArgumentExpressionSafety.IsCaptured(firstMember!, context.SemanticModel, context.CancellationToken))
         {
             return;
         }
 
         context.ReportDiagnostic(Diagnostic.Create(Rule, chain.GetLocation()));
+    }
+
+    private static bool WouldSplitUnbracedChild(ExpressionSyntax chain, SyntaxNodeAnalysisContext context)
+    {
+        // A chain can also sit in the condition or a braced body of a compact,
+        // nested statement. Wrapping then expands the outer unbraced child.
+        for (var node = chain.Parent; node is not null && node is not MemberDeclarationSyntax; node = node.Parent)
+        {
+            if (node is not StatementSyntax statement || statement is BlockSyntax)
+                continue;
+
+            if (statement.Parent is IfStatementSyntax or WhileStatementSyntax or DoStatementSyntax or
+                ForStatementSyntax or CommonForEachStatementSyntax or UsingStatementSyntax or
+                LockStatementSyntax or FixedStatementSyntax ||
+                (statement.Parent is ElseClauseSyntax && statement is not IfStatementSyntax))
+            {
+                var span = statement.SyntaxTree.GetLineSpan(statement.Span, context.CancellationToken);
+                // Every enclosing statement spans at least these same lines.
+                return span.StartLinePosition.Line == span.EndLinePosition.Line;
+            }
+        }
+
+        return false;
     }
 
     private static bool HasStatementOrArrowAncestor(SyntaxNode node, out bool isInInterpolation)
@@ -169,8 +201,9 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
         }
     }
 
-    private static bool TryGetChainDotCount(ExpressionSyntax chain, out int count)
+    private static bool TryGetChainDotCount(ExpressionSyntax chain, out int count, out MemberAccessExpressionSyntax? firstMember)
     {
+        firstMember = null;
         count = 0;
         ExpressionSyntax? current = chain;
         while (current is not null)
@@ -183,6 +216,7 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
                 case MemberAccessExpressionSyntax memberAccess
                     when memberAccess.IsKind(SyntaxKind.SimpleMemberAccessExpression):
                     count++;
+                    firstMember = memberAccess;
                     current = memberAccess.Expression;
                     break;
                 case ConditionalAccessExpressionSyntax:
@@ -297,7 +331,7 @@ public sealed class WrapFluentChainAnalyzer : DiagnosticAnalyzer
             expression = parenthesized.Expression;
         }
 
-        return TryGetChainDotCount(expression, out var count) && count >= 2;
+        return TryGetChainDotCount(expression, out var count, out _) && count >= 2;
     }
 
     private static bool IsSupportedLanguageVersion(
