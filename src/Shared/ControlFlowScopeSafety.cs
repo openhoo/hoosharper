@@ -9,7 +9,7 @@ namespace HooSharper.Internal;
 
 internal static class ControlFlowScopeSafety
 {
-    internal static bool HasExpandedScopeCollision(BlockSyntax block, StatementSyntax nestedStatement)
+    internal static bool HasExpandedScopeCollision(StatementSyntax oldScope, StatementSyntax nestedStatement)
     {
         var introducedNames = new HashSet<string>(System.StringComparer.Ordinal);
         foreach (var node in nestedStatement.DescendantNodesAndSelf())
@@ -27,7 +27,7 @@ internal static class ControlFlowScopeSafety
         }
 
         StatementSyntax? containingStatement = null;
-        for (var current = block.Parent; current is not null; current = current.Parent)
+        for (var current = oldScope.Parent; current is not null; current = current.Parent)
         {
             if (current is StatementSyntax statement)
             {
@@ -43,7 +43,7 @@ internal static class ControlFlowScopeSafety
 
         foreach (var token in containingStatement.DescendantTokens())
         {
-            if (!block.FullSpan.Contains(token.Span) && token.IsKind(SyntaxKind.IdentifierToken) &&
+            if (!oldScope.FullSpan.Contains(token.Span) && token.IsKind(SyntaxKind.IdentifierToken) &&
                 introducedNames.Contains(token.ValueText))
             {
                 return true;
@@ -90,12 +90,27 @@ internal static class ControlFlowScopeSafety
         SemanticModel semanticModel,
         CancellationToken cancellationToken) =>
         !ifStatement.ContainsDiagnostics &&
-        ifStatement.Else is { Statement: not IfStatementSyntax } &&
+        ifStatement.Else is not null &&
         ifStatement.Parent is not ElseClauseSyntax &&
         !ifStatement.DescendantTrivia(descendIntoTrivia: true).Any(trivia => trivia.IsDirective) &&
-        DefinitelyTerminates(ifStatement.Statement, semanticModel, cancellationToken);
+        DefinitelyTerminates(ifStatement.Statement, semanticModel, cancellationToken) &&
+        !(HooSharper.Analyzers.ProjectStylePolicy.IsEnabled(semanticModel.Compilation.Options, ifStatement.SyntaxTree, "S1199", cancellationToken) &&
+          (ifStatement.Parent is not BlockSyntax || ElseNeedsStandaloneBlock(ifStatement.Else)));
 
-    private static bool DefinitelyTerminates(
+    // The fixer must keep declarations in their original scope, and must not
+    // discard comments in an otherwise empty else block.
+    internal static bool ElseNeedsStandaloneBlock(ElseClauseSyntax clause)
+    {
+        var body = clause.Statement;
+        if (body is BlockSyntax { Statements.Count: 0 } && clause.DescendantTrivia().Any(t =>
+                !t.IsKind(SyntaxKind.WhitespaceTrivia) && !t.IsKind(SyntaxKind.EndOfLineTrivia)))
+            return true;
+        return body.DescendantNodesAndSelf().Any(n => n is LocalDeclarationStatementSyntax or LocalFunctionStatementSyntax or
+                   DeclarationExpressionSyntax or SingleVariableDesignationSyntax or LabeledStatementSyntax) &&
+               (body is not IfStatementSyntax nested || HasExpandedScopeCollision(nested, nested));
+    }
+
+    internal static bool DefinitelyTerminates(
         StatementSyntax statement,
         SemanticModel semanticModel,
         CancellationToken cancellationToken)

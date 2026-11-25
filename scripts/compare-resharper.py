@@ -8,13 +8,15 @@ original reports: diagnostic spans and inspections are not one-to-one.
 """
 
 import argparse
+from bisect import bisect_right
 import collections
 import hashlib
 import json
 import os
-import re
 from pathlib import Path
 import xml.etree.ElementTree as ET
+
+from smoke_support import CSHARP_NEWLINE, source_text
 
 
 # Only IDs verified in ReSharper's native 2026.2.3.1 inspection catalog.
@@ -44,8 +46,15 @@ MAPPING = {
 }
 
 
-def utf16_source(source):
-    return source.read_bytes().decode("utf-8-sig").encode("utf-16-le")
+def line_index(path):
+    text = source_text(path)
+    starts = [0]
+    previous = 0
+    for newline in CSHARP_NEWLINE.finditer(text):
+        end = newline.end()
+        starts.append(starts[-1] + len(text[previous:end].encode("utf-16-le")) // 2)
+        previous = end
+    return starts, starts[-1] + len(text[previous:].encode("utf-16-le")) // 2
 
 
 def relative_source(file, root):
@@ -57,7 +66,7 @@ def relative_source(file, root):
 
 def source_hash(path):
     # Roslyn SourceText excludes an encoding preamble, while retaining newlines.
-    return hashlib.sha256(path.read_bytes().decode("utf-8-sig").encode("utf-8")).hexdigest()
+    return hashlib.sha256(source_text(path).encode("utf-8")).hexdigest()
 
 
 def verify_hashes(root, hashes):
@@ -80,8 +89,12 @@ def capture_path(resharper_path):
 
 
 def validate_native_project(hoo, reference):
-    names = {item.get("Name") for item in reference.findall(".//Project")}
-    if reference.findall(".//Issue") and Path(hoo["project"]).stem not in names:
+    if reference.tag != "Report" or reference.find("Issues") is None:
+        raise RuntimeError("Native report is missing the InspectCode Issues section")
+    names = {item.get("Name") for item in reference.findall("./Issues/Project")}
+    # This runner invokes InspectCode on exactly one .csproj. Findings from
+    # another project must never count as findings against this snapshot.
+    if (names or reference.findall(".//Issue")) and names != {Path(hoo["project"]).stem}:
         raise RuntimeError("Native report project does not match the HooSharper project")
 
 
@@ -102,7 +115,7 @@ def record_native_capture(hoo_path, resharper_path):
     capture_path(resharper_path).write_text(json.dumps(capture, indent=2) + "\n")
 
 
-def normalize_issue(issue, root, source_texts=None):
+def normalize_issue(issue, root, indexes=None):
     """Keep offsets/multiplicity; ReSharper offsets count UTF-16 code units."""
     item = dict(issue.attrib)
     item["file"] = relative_source(item.get("File", ""), root)
@@ -111,9 +124,11 @@ def normalize_issue(issue, root, source_texts=None):
     source = root / item["file"]
     if source.is_file() and "Offset" in item:
         start, end = map(int, item["Offset"].split("-"))
-        text = source_texts[item["file"]] if source_texts is not None else utf16_source(source)
-        item["line"] = len(re.findall(r"\r\n|\r|\n", text[: start * 2].decode("utf-16-le", "replace"))) + 1
-        item["endLine"] = len(re.findall(r"\r\n|\r|\n", text[: max(start, end - 1) * 2].decode("utf-16-le", "replace"))) + 1
+        starts, length = indexes[item["file"]] if indexes is not None else line_index(source)
+        if not 0 <= start <= end <= length:
+            raise RuntimeError(f"Invalid native offset {start}-{end} in {item['file']}")
+        item["line"] = bisect_right(starts, start)
+        item["endLine"] = bisect_right(starts, max(start, end - 1))
     return item
 
 
@@ -136,11 +151,11 @@ def compare(hoo_path, resharper_path):
             capture["referenceReportSha256"] != hashlib.sha256(resharper_path.read_bytes()).hexdigest()):
         raise RuntimeError("Native capture does not match the project and paired reports")
     verify_hashes(root, capture["nativeSourceHashes"])
-    source_texts = {name: utf16_source(root / name) for name in capture["nativeSourceHashes"]}
+    indexes = {name: line_index(root / name) for name in capture["nativeSourceHashes"]}
     reference = ET.parse(resharper_path).getroot()
     validate_native_project(hoo, reference)
     types = {item.get("Id"): dict(item.attrib) for item in reference.findall(".//IssueType")}
-    issues = [normalize_issue(item, root, source_texts) for item in reference.findall(".//Issue")]
+    issues = [normalize_issue(item, root, indexes) for item in reference.findall(".//Issue")]
     native = [item for item in issues if types.get(item.get("TypeId"), {}).get("CategoryId") != "RoslynAnalyzers"]
     rows = []
     for rule, reference_ids in MAPPING.items():

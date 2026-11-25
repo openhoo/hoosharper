@@ -34,13 +34,14 @@ public sealed class UseTypePatternAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeLocalDeclaration(SyntaxNodeAnalysisContext context)
     {
         if (FindCandidate((LocalDeclarationStatementSyntax)context.Node,
-                context.SemanticModel, context.CancellationToken) is { } candidate)
+                context.SemanticModel, context.CancellationToken) is { } candidate &&
+            !CallerArgumentExpressionSafety.ContainsFormattableCapture(candidate.Cast, context.SemanticModel, context.CancellationToken))
         {
-            context.ReportDiagnostic(Diagnostic.Create(Rule, candidate.OperatorToken.GetLocation()));
+            context.ReportIfUncaptured(Rule, candidate.Cast.OperatorToken.GetLocation(), candidate.Branch);
         }
     }
 
-    internal static BinaryExpressionSyntax? FindCandidate(
+    internal static (BinaryExpressionSyntax Cast, IfStatementSyntax Branch)? FindCandidate(
         LocalDeclarationStatementSyntax declarationStatement,
         SemanticModel semanticModel,
         CancellationToken cancellationToken)
@@ -131,7 +132,7 @@ public sealed class UseTypePatternAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        return asExpression;
+        return (asExpression, ifStatement);
     }
 
     private static IdentifierNameSyntax? GetNullCheckedIdentifier(ExpressionSyntax condition)

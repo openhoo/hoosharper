@@ -1,4 +1,8 @@
 using System.Collections.Immutable;
+using System.Reflection;
+using System.Reflection.PortableExecutable;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using HooSharper.Analyzers;
 using HooSharper.CodeFixes;
@@ -48,6 +52,10 @@ return await RunAsync(Path.GetFullPath(args[0]), Path.GetFullPath(args[1]), prop
 static async Task<int> RunAsync(string projectPath, string outputPath,
     Dictionary<string, string> properties, bool fixAll, string? fixedDirectory, bool requireAllRules)
 {
+    var analyzerAssembly = typeof(PreferEarlyReturnAnalyzer).Assembly;
+    var fixerAssembly = typeof(PreferEarlyReturnCodeFixProvider).Assembly;
+    var analyzerSha256 = LoadedAssemblyHash(analyzerAssembly);
+    var fixerSha256 = LoadedAssemblyHash(fixerAssembly);
     using var workspace = MSBuildWorkspace.Create(properties);
     var workspaceFailures = new System.Collections.Concurrent.ConcurrentQueue<string>();
     using var failureRegistration = workspace.RegisterWorkspaceFailedHandler(e =>
@@ -63,10 +71,10 @@ static async Task<int> RunAsync(string projectPath, string outputPath,
     var compilerDiagnostics = compilation.GetDiagnostics();
     var failures = compilerDiagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)
         .Select(d => d.ToString()).Concat(workspaceFailures).ToList();
-    var analyzers = typeof(PreferEarlyReturnAnalyzer).Assembly.GetTypes()
+    var analyzers = analyzerAssembly.GetTypes()
         .Where(t => !t.IsAbstract && typeof(DiagnosticAnalyzer).IsAssignableFrom(t))
         .Select(t => (DiagnosticAnalyzer)Activator.CreateInstance(t)!).ToImmutableArray();
-    var fixers = typeof(PreferEarlyReturnCodeFixProvider).Assembly.GetTypes()
+    var fixers = fixerAssembly.GetTypes()
         .Where(t => !t.IsAbstract && typeof(CodeFixProvider).IsAssignableFrom(t))
         .Select(t => (CodeFixProvider)Activator.CreateInstance(t)!)
         .SelectMany(provider => provider.FixableDiagnosticIds.Select(id => (id, provider)))
@@ -85,6 +93,8 @@ static async Task<int> RunAsync(string projectPath, string outputPath,
 
     var fixResults = new List<object>();
     var cumulativeRounds = new List<object>();
+    var sourceByteHashes = new Dictionary<string, string>();
+    string? exportManifestSha256 = null;
     var baselineWarnings = WarningCounts(compilerDiagnostics);
     if (fixAll && failures.Count == 0)
     {
@@ -127,8 +137,13 @@ static async Task<int> RunAsync(string projectPath, string outputPath,
             var remaining = await AnalyzeAsync(fixedCompilation,
                 analyzers.Where(a => a.SupportedDiagnostics.Any(d => d.Id == group.Key)).ToImmutableArray(),
                 fixedProject.AnalyzerOptions, true);
-            var changedDocuments = changes[0].ChangedSolution.GetChanges(original)
-                .GetProjectChanges().SelectMany(p => p.GetChangedDocuments()).Count();
+            var changedDocuments = 0;
+            foreach (var documentId in fixedProject.GetChanges(project).GetChangedDocuments())
+            {
+                var beforeText = await project.GetDocument(documentId)!.GetTextAsync();
+                if (!beforeText.ContentEquals(await fixedProject.GetDocument(documentId)!.GetTextAsync()))
+                    changedDocuments++;
+            }
             if (errors.Length != 0)
                 failures.AddRange(errors.Select(error => $"{group.Key} Fix All: {error}"));
             if (remaining.Any(d => d.Id == "AD0001"))
@@ -147,7 +162,11 @@ static async Task<int> RunAsync(string projectPath, string outputPath,
 
         var current = project;
         var converged = false;
-        for (var round = 0; round < 20; round++)
+        // Independent rule checks start from the original solution. Their
+        // failures must not truncate this separate cumulative experiment.
+        var failuresBeforeCumulative = failures.Count;
+        const int maxRounds = 20;
+        for (var round = 0; round < maxRounds; round++)
         {
             var currentCompilation = (await current.GetCompilationAsync())!;
             var pending = await AnalyzeAsync(currentCompilation, analyzers, current.AnalyzerOptions, true);
@@ -221,30 +240,39 @@ static async Task<int> RunAsync(string projectPath, string outputPath,
                 converged = true;
                 break;
             }
-            if (failures.Count != 0 || beforeKeys.SequenceEqual(Keys(after)))
+            if (failures.Count > failuresBeforeCumulative)
                 break;
+            if (beforeKeys.SequenceEqual(Keys(after)))
+            {
+                failures.Add($"Cumulative Fix All stopped in round {round + 1}: the diagnostics are unchanged.");
+                break;
+            }
         }
-        if (!converged)
-            failures.Add("Cumulative Fix All did not converge to zero diagnostics within 20 rounds.");
+        if (!converged && failures.Count == failuresBeforeCumulative)
+            failures.Add($"Cumulative Fix All still has diagnostics after {maxRounds} rounds.");
         if (converged && failures.Count == 0 && fixedDirectory is not null)
         {
             var exported = new Dictionary<string, string>();
             foreach (var document in current.Documents)
             {
                 var relative = Path.GetRelativePath(Path.GetDirectoryName(projectPath)!, document.FilePath!);
-                if (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative) ||
-                    relative.Split(Path.DirectorySeparatorChar).Any(p => p is "obj" or "bin"))
+                if (Path.IsPathRooted(relative) ||
+                    relative.Split(Path.DirectorySeparatorChar).Any(p => p is ".." or "obj" or "bin"))
                     continue;
                 var destination = Path.Combine(fixedDirectory, relative);
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                var content = (await document.GetTextAsync()).ToString();
-                await File.WriteAllTextAsync(destination, content);
-                exported[relative.Replace('\\', '/')] = Convert.ToHexString(
-                    System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(content)))
-                    .ToLowerInvariant();
+                var originalText = await project.GetDocument(document.Id)!.GetTextAsync();
+                var bytes = await File.ReadAllBytesAsync(document.FilePath!);
+                var key = relative.Replace('\\', '/');
+                sourceByteHashes[key] = Hash(bytes);
+                var fixedBytes = EncodeExport(key, bytes, originalText, await document.GetTextAsync());
+                await File.WriteAllBytesAsync(destination, fixedBytes);
+                exported[key] = Hash(fixedBytes);
             }
-            await File.WriteAllTextAsync(Path.Combine(fixedDirectory, ".hoosharper-export.json"),
-                JsonSerializer.Serialize(exported, new JsonSerializerOptions { WriteIndented = true }));
+            Directory.CreateDirectory(fixedDirectory);
+            var manifest = JsonSerializer.SerializeToUtf8Bytes(exported, new JsonSerializerOptions { WriteIndented = true });
+            await File.WriteAllBytesAsync(Path.Combine(fixedDirectory, ".hoosharper-export.json"), manifest);
+            exportManifestSha256 = Hash(manifest);
         }
     }
 
@@ -286,15 +314,15 @@ static async Task<int> RunAsync(string projectPath, string outputPath,
     }).ToArray();
     var parseOptions = (Microsoft.CodeAnalysis.CSharp.CSharpParseOptions)project.ParseOptions!;
     var compilationOptions = (Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions)project.CompilationOptions!;
+    if (analyzerSha256 != Hash(File.ReadAllBytes(analyzerAssembly.Location)) ||
+        fixerSha256 != Hash(File.ReadAllBytes(fixerAssembly.Location)))
+        failures.Add("Analyzer or fixer assembly changed on disk while the smoke run was in progress.");
     Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
     await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(new
     {
         project = projectPath, properties, sourceHashes, documents = project.Documents.Count(),
-        analyzerSha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
-            File.ReadAllBytes(typeof(PreferEarlyReturnAnalyzer).Assembly.Location))).ToLowerInvariant(),
-        fixerSha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
-            File.ReadAllBytes(typeof(PreferEarlyReturnCodeFixProvider).Assembly.Location))).ToLowerInvariant(),
-        inputHashes, references,
+        analyzerSha256, fixerSha256,
+        inputHashes, references, sourceByteHashes, exportManifestSha256,
         effectiveOptions = new
         {
             languageVersion = parseOptions.LanguageVersion.ToString(),
@@ -315,6 +343,39 @@ static async Task<int> RunAsync(string projectPath, string outputPath,
     foreach (var failure in failures)
         Console.Error.WriteLine(failure);
     return failures.Count == 0 ? 0 : 1;
+}
+
+static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+static string LoadedAssemblyHash(Assembly assembly)
+{
+    var bytes = File.ReadAllBytes(assembly.Location);
+    using var stream = new MemoryStream(bytes);
+    using var reader = new PEReader(stream);
+    var metadata = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(reader);
+    if (metadata.GetGuid(metadata.GetModuleDefinition().Mvid) != assembly.ManifestModule.ModuleVersionId)
+        throw new InvalidDataException($"Assembly on disk differs from the loaded module: {assembly.Location}");
+    return Hash(bytes);
+}
+
+static byte[] EncodeExport(string path, byte[] bytes, Microsoft.CodeAnalysis.Text.SourceText original,
+    Microsoft.CodeAnalysis.Text.SourceText updated)
+{
+    // Roslyn's encoding can support a preamble even when the file has none.
+    var encoding = original.Encoding ?? throw new InvalidDataException($"Unknown source encoding: {path}");
+    var preamble = encoding.GetPreamble();
+    var skip = bytes.AsSpan().StartsWith(preamble) ? preamble.Length : 0;
+    var text = original.ToString();
+    if (encoding.GetString(bytes, skip, bytes.Length - skip) != text)
+        throw new InvalidDataException($"Source bytes no longer match the analyzed document: {path}");
+    if (original.ContentEquals(updated))
+        return bytes;
+
+    // Fail if encoding new text would lose a character or change unrelated bytes.
+    var strict = Encoding.GetEncoding(encoding.CodePage, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
+    if (!strict.GetBytes(text).AsSpan().SequenceEqual(bytes.AsSpan(skip)))
+        throw new InvalidDataException($"Source cannot round-trip in its original encoding: {path}");
+    return [.. bytes.AsSpan(0, skip), .. strict.GetBytes(updated.ToString())];
 }
 
 // The IDE saves text, not the fixer's syntax tree. Reparse changed files with

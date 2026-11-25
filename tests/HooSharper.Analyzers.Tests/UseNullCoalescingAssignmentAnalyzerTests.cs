@@ -52,7 +52,7 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
     }
 
     [Fact]
-    public Task IgnoresPropertyTargets()
+    public Task FixesAutoPropertyOnStableReceiver()
     {
         const string source = """
             class Holder
@@ -66,7 +66,7 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
 
                 void Set(string fallback)
                 {
-                    if (holder.Value == null)
+                    if (holder.Value {|#0:==|} null)
                     {
                         holder.Value = fallback;
                     }
@@ -74,8 +74,98 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
             }
             """;
 
-        return VerifyCS.VerifyAnalyzerAsync(source);
+        var fixedSource = source.Replace("""
+                    if (holder.Value {|#0:==|} null)
+                    {
+                        holder.Value = fallback;
+                    }
+            """.TrimEnd(), "        holder.Value ??= fallback;");
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
     }
+
+    [Fact]
+    public Task FixesUnbracedAutoPropertyAndPreservesComments()
+    {
+        const string source = """
+            class Rule
+            {
+                string? DependentRules { get; set; }
+                void Initialize()
+                {
+                    if (DependentRules {|#0:==|} null) DependentRules = "first"; // keep this
+                    if (DependentRules {|#1:is|} null) // lazy
+                        DependentRules = "next" /* value */; // and this
+                }
+            }
+            """;
+        const string fixedSource = """
+            class Rule
+            {
+                string? DependentRules { get; set; }
+                void Initialize()
+                {
+                    DependentRules ??= "first"; // keep this
+                    // lazy
+                    DependentRules ??= "next" /* value */; // and this
+                }
+            }
+            """;
+        var expected = Enumerable.Range(0, 2).Select(i =>
+            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(i));
+        return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
+    }
+
+    [Fact]
+    public Task UnbracedAssignmentKeepsCapturedArgumentSpacing()
+    {
+        const string source = """
+            using System.Runtime.CompilerServices;
+            class C
+            {
+                static string Capture(bool ready, [CallerArgumentExpression("ready")] string expr = "") => expr;
+                void Run(string? value, bool ready)
+                {
+                    if (value {|#0:is|} null) value = Capture(ready    ==      true);
+                }
+            }
+            """;
+        var fixedSource = source.Replace("if (value {|#0:is|} null) value =", "value ??=");
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
+
+    [Fact]
+    public Task UnbracedGuardKeepsOutVariableFromShadowingField() =>
+        VerifyCS.VerifyAnalyzerAsync("""
+            class Rule
+            {
+                int parsed = 7;
+                string Make(out int value) { value = 42; return ""; }
+                int Read(string? s)
+                {
+                    if (s is null) s = Make(out var parsed);
+                    return parsed;
+                }
+            }
+            """);
+
+    [Fact]
+    public Task RequiresTheSameAutoPropertyAndStableReceiver() =>
+        VerifyCS.VerifyAnalyzerAsync("""
+            class C
+            {
+                public string Value { get; set; }
+                public string Other { get; set; }
+                C Next() => this;
+                void Init(C a, C b)
+                {
+                    if (a.Value is null) { b.Value = "different receiver"; }
+                    if (a.Value is null) { a.Other = "different property"; }
+                    if (Next().Value is null) { Next().Value = "evaluated twice"; }
+                }
+            }
+            """);
 
     [Fact]
     public Task PreservesComments()
@@ -203,12 +293,12 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
     }
 
     [Fact]
-    public Task ReplacesStaticFieldAndIgnoresPropertyTargets()
+    public Task ReplacesStaticFieldAndIgnoresVirtualPropertyTargets()
     {
         const string source = """
             class Holder
             {
-                public string? Value { get; set; }
+                public virtual string? Value { get; set; }
             }
 
             class Example
@@ -232,7 +322,7 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
         const string fixedSource = """
             class Holder
             {
-                public string? Value { get; set; }
+                public virtual string? Value { get; set; }
             }
 
             class Example
@@ -799,7 +889,7 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
             class Example
             {
                 int? storage;
-                int? Property { get; set; }
+                int? Property { get => storage; set => storage = value; }
                 ref int? Reference => ref storage;
                 Box receiver = new Box();
                 Box GetBox() => receiver;
@@ -853,7 +943,7 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
                 {
                     if ({|#0:!|}number.HasValue) { number = 7; }
                     if (text {|#1:is|} null) { text = "fallback"; }
-                    if (!Property.HasValue) { Property = 8; }
+                    if ({|#2:!|}Property.HasValue) { Property = 8; }
                 }
             }
             """;
@@ -865,11 +955,11 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
                 {
                     number ??= 7;
                     text ??= "fallback";
-                    if (!Property.HasValue) { Property = 8; }
+                    Property ??= 8;
                 }
             }
             """;
-        var expected = Enumerable.Range(0, 2).Select(index =>
+        var expected = Enumerable.Range(0, 3).Select(index =>
             VerifyCS.Diagnostic(UseNullCoalescingAssignmentAnalyzer.DiagnosticId).WithLocation(index));
         return VerifyCS.VerifyCodeFixAsync(source, expected, fixedSource, fixedSource);
     }
@@ -889,7 +979,7 @@ public sealed class UseNullCoalescingAssignmentAnalyzerTests
 
     [Theory]
     [InlineData("class Example { void Run(int? value, int? other) { if (!value.HasValue) { other = 5; } } }", LanguageVersion.Latest)]
-    [InlineData("class Example { int? Value { get; set; } void Run() { if (!Value.HasValue) { Value = 5; } } }", LanguageVersion.Latest)]
+    [InlineData("class Example { public virtual int? Value { get; set; } void Run() { if (!Value.HasValue) { Value = 5; } } }", LanguageVersion.Latest)]
     [InlineData("class Box { public int? Value; } class Example { Box receiver = new Box(); void Run() { if (!receiver.Value.HasValue) { receiver.Value = 5; } } }", LanguageVersion.Latest)]
     [InlineData("class Example { void Run(int? value) { if (!value.HasValue) { value = 5; } else { value = 6; } } }", LanguageVersion.Latest)]
     [InlineData("class Example { void Run(int? value) { if (! /* preserve */ value.HasValue) { value = 5; } } }", LanguageVersion.Latest)]

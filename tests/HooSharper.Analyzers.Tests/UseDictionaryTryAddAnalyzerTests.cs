@@ -990,4 +990,37 @@ public sealed class UseDictionaryTryAddAnalyzerTests
             VerifyCS.Diagnostic(UseDictionaryTryAddAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
     }
 
+
+    [Fact]
+    public Task RewritesBracelessAddUnderEnclosingIfAndPreservesComments()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            class C
+            {
+                void Run(bool enabled, int value)
+                {
+                    var items = new Dictionary<int, int>();
+                    if (enabled)
+                        if (!items.{|#0:ContainsKey|}(value)) // guard
+                            items./* insertion */Add(value: 4, key: value); // after
+                }
+            }
+            """;
+        const string fixedSource = """
+            using System.Collections.Generic;
+            class C
+            {
+                void Run(bool enabled, int value)
+                {
+                    var items = new Dictionary<int, int>();
+                    if (enabled)
+                        // guard
+                        items./* insertion */TryAdd(value: 4, key: value); // after
+                }
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(UseDictionaryTryAddAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
+    }
 }

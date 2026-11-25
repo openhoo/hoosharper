@@ -9,7 +9,6 @@ using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Microsoft.CodeAnalysis.Formatting;
 
 namespace HooSharper.CodeFixes;
 
@@ -56,9 +55,7 @@ public sealed class UseNullCoalescingAssignmentCodeFixProvider : CodeFixProvider
         {
             return document;
         }
-        if (root is null ||
-            ifStatement.Statement is not BlockSyntax { Statements.Count: 1 } block ||
-            block.Statements[0] is not ExpressionStatementSyntax
+        if (root is null || UseNullCoalescingAssignmentAnalyzer.GetAssignmentStatement(ifStatement) is not
             {
                 Expression: AssignmentExpressionSyntax assignment,
             } assignmentStatement)
@@ -66,35 +63,36 @@ public sealed class UseNullCoalescingAssignmentCodeFixProvider : CodeFixProvider
             return document;
         }
 
-        var leadingTrivia = ifStatement.GetLeadingTrivia()
-            .AddRange(CommentLines(ifStatement.IfKeyword.TrailingTrivia))
-            .AddRange(CommentLines(ifStatement.OpenParenToken.LeadingTrivia))
-            .AddRange(CommentLines(ifStatement.OpenParenToken.TrailingTrivia))
-            .AddRange(CommentLines(ifStatement.Condition.GetLeadingTrivia()))
-            .AddRange(CommentLines(ifStatement.Condition.GetTrailingTrivia()))
-            .AddRange(CommentLines(ifStatement.CloseParenToken.LeadingTrivia))
-            .AddRange(CommentLines(ifStatement.CloseParenToken.TrailingTrivia))
+        var replacement = assignmentStatement.WithExpression(
+            SyntaxFactory.AssignmentExpression(SyntaxKind.CoalesceAssignmentExpression, assignment.Left,
+                SyntaxFactory.Token(SyntaxKind.QuestionQuestionEqualsToken).WithTriviaFrom(assignment.OperatorToken),
+                assignment.Right));
+        if (ifStatement.Statement is not BlockSyntax block)
+        {
+            return document.WithSyntaxRoot(root.ReplaceNode(ifStatement,
+                CodeFixTrivia.UnwrapEmbeddedStatement(document, ifStatement, replacement, cancellationToken)));
+        }
+
+        var leadingTrivia = ifStatement.GetLeadingTrivia();
+        var guardTrivia = ifStatement.IfKeyword.TrailingTrivia
+            .AddRange(ifStatement.OpenParenToken.LeadingTrivia).AddRange(ifStatement.OpenParenToken.TrailingTrivia)
+            .AddRange(ifStatement.Condition.GetLeadingTrivia()).AddRange(ifStatement.Condition.GetTrailingTrivia())
+            .AddRange(ifStatement.CloseParenToken.LeadingTrivia).AddRange(ifStatement.CloseParenToken.TrailingTrivia);
+
+        leadingTrivia = leadingTrivia.AddRange(CommentLines(guardTrivia))
             .AddRange(CommentLines(block.OpenBraceToken.LeadingTrivia))
             .AddRange(CommentLines(block.OpenBraceToken.TrailingTrivia))
             .AddRange(CommentLines(assignmentStatement.GetLeadingTrivia()))
             .AddRange(CommentLines(block.CloseBraceToken.LeadingTrivia))
             .AddRange(CommentLines(block.CloseBraceToken.TrailingTrivia));
         var trailingTrivia = InlineComments(assignmentStatement.GetTrailingTrivia())
-            .AddRange(ifStatement.GetTrailingTrivia().Where(trivia =>
-                !trivia.IsKind(SyntaxKind.SingleLineCommentTrivia) &&
-                !trivia.IsKind(SyntaxKind.MultiLineCommentTrivia)));
-
-        var replacement = SyntaxFactory.ExpressionStatement(
-                SyntaxFactory.AssignmentExpression(
-                    SyntaxKind.CoalesceAssignmentExpression,
-                    assignment.Left,
-                    SyntaxFactory.Token(SyntaxKind.QuestionQuestionEqualsToken).WithTriviaFrom(assignment.OperatorToken),
-                    assignment.Right))
+            .AddRange(ifStatement.GetTrailingTrivia().Where(trivia => !CodeFixTrivia.IsComment(trivia)));
+        replacement = replacement
             .WithLeadingTrivia(leadingTrivia)
-            .WithTrailingTrivia(trailingTrivia)
-            .WithAdditionalAnnotations(Formatter.Annotation);
+            .WithTrailingTrivia(trailingTrivia);
 
-        return document.WithSyntaxRoot(root.ReplaceNode(ifStatement, replacement));
+        return await CodeFixTrivia.ReplaceAndFormatAsync(document, root, ifStatement, replacement, cancellationToken)
+            .ConfigureAwait(false);
     }
     private static SyntaxTriviaList CommentLines(SyntaxTriviaList trivia)
     {

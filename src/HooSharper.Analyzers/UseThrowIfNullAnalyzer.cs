@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Linq;
+using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -30,8 +31,8 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
         context.EnableConcurrentExecution();
         context.RegisterCompilationStartAction(static compilationContext =>
         {
-            var exceptionType = compilationContext.Compilation.GetTypeByMetadataName("System.ArgumentNullException");
-            if (exceptionType is null || !HasThrowIfNull(exceptionType))
+            var exceptionType = GetAvailableExceptionType(compilationContext.Compilation);
+            if (exceptionType is null)
             {
                 return;
             }
@@ -40,6 +41,12 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
                 nodeContext => AnalyzeIfStatement(nodeContext, exceptionType),
                 SyntaxKind.IfStatement);
         });
+    }
+
+    internal static INamedTypeSymbol? GetAvailableExceptionType(Compilation compilation)
+    {
+        var type = compilation.GetTypeByMetadataName("System.ArgumentNullException");
+        return type is not null && HasThrowIfNull(type) ? type : null;
     }
 
     private static bool HasThrowIfNull(INamedTypeSymbol exceptionType) =>
@@ -59,19 +66,28 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context, INamedTypeSymbol exceptionType)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
-        if (ifStatement.Else is not null || !TryGetThrowStatement(ifStatement.Statement, out var throwStatement) ||
-            HasDirective(ifStatement) ||
+        if (FindGuard(ifStatement, context.SemanticModel, exceptionType, context.CancellationToken) is { } guard)
+        {
+            context.ReportIfUncaptured(Rule, guard.Location, ifStatement);
+        }
+    }
+
+    internal static (ExpressionSyntax Checked, ObjectCreationExpressionSyntax Creation, ThrowStatementSyntax Throw, Location Location)?
+        FindGuard(IfStatementSyntax ifStatement, SemanticModel model, INamedTypeSymbol exceptionType, CancellationToken token)
+    {
+        if (ifStatement.ContainsDiagnostics || ifStatement.Else is not null ||
+            !TryGetThrowStatement(ifStatement.Statement, out var throwStatement) || HasDirective(ifStatement) ||
             throwStatement.Expression is not ObjectCreationExpressionSyntax { Initializer: null } creation ||
             creation.ArgumentList is not { Arguments.Count: 1 } argumentList ||
             argumentList.Arguments[0].NameColon is not null ||
-            !SymbolEqualityComparer.Default.Equals(context.SemanticModel.GetTypeInfo(creation, context.CancellationToken).Type, exceptionType) ||
-            !TryGetCheckedExpression(ifStatement.Condition, context, out var checkedExpression, out var location) ||
-            !IsMatchingNameOf(argumentList.Arguments[0].Expression, checkedExpression, context))
+            !SymbolEqualityComparer.Default.Equals(model.GetTypeInfo(creation, token).Type, exceptionType) ||
+            !TryGetCheckedExpression(ifStatement.Condition, model, token, out var checkedExpression, out var location) ||
+            !MatchesArgumentName(argumentList.Arguments[0].Expression, checkedExpression, model, token))
         {
-            return;
+            return null;
         }
 
-        context.ReportDiagnostic(Diagnostic.Create(Rule, location));
+        return (checkedExpression, creation, throwStatement, location);
     }
 
     private static bool TryGetThrowStatement(StatementSyntax statement, out ThrowStatementSyntax throwStatement)
@@ -94,7 +110,8 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
 
     private static bool TryGetCheckedExpression(
         ExpressionSyntax condition,
-        SyntaxNodeAnalysisContext context,
+        SemanticModel model,
+        CancellationToken token,
         out ExpressionSyntax checkedExpression,
         out Location location)
     {
@@ -109,7 +126,7 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
         {
             checkedExpression = WalkDownParentheses(expression);
             location = isKeyword.GetLocation();
-            return CanPassToThrowIfNull(checkedExpression, context);
+            return CanPassToThrowIfNull(checkedExpression, model, token);
         }
 
         if (condition is BinaryExpressionSyntax
@@ -118,20 +135,20 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
                 OperatorToken: var operatorToken,
             } equality &&
             HooSharper.Internal.NullComparisonSafety.IsSafeBinary(
-                context.SemanticModel.GetOperation(equality, context.CancellationToken)))
+                model.GetOperation(equality, token)))
         {
             if (equality.Left.IsKind(SyntaxKind.NullLiteralExpression))
             {
                 checkedExpression = WalkDownParentheses(equality.Right);
                 location = operatorToken.GetLocation();
-                return CanPassToThrowIfNull(checkedExpression, context);
+                return CanPassToThrowIfNull(checkedExpression, model, token);
             }
 
             if (equality.Right.IsKind(SyntaxKind.NullLiteralExpression))
             {
                 checkedExpression = WalkDownParentheses(equality.Left);
                 location = operatorToken.GetLocation();
-                return CanPassToThrowIfNull(checkedExpression, context);
+                return CanPassToThrowIfNull(checkedExpression, model, token);
             }
         }
 
@@ -139,29 +156,35 @@ public sealed class UseThrowIfNullAnalyzer : DiagnosticAnalyzer
         location = null!;
         return false;
     }
-    private static bool CanPassToThrowIfNull(ExpressionSyntax expression, SyntaxNodeAnalysisContext context)
+
+    private static bool CanPassToThrowIfNull(ExpressionSyntax expression, SemanticModel model, CancellationToken token)
     {
-        var type = context.SemanticModel.GetTypeInfo(expression, context.CancellationToken).Type;
+        var type = model.GetTypeInfo(expression, token).Type;
         return type is { TypeKind: not (TypeKind.Pointer or TypeKind.FunctionPointer or TypeKind.Error or TypeKind.Dynamic) } &&
-            context.SemanticModel.Compilation.ClassifyConversion(
+            model.Compilation.ClassifyConversion(
                 type,
-                context.SemanticModel.Compilation.GetSpecialType(SpecialType.System_Object)).IsImplicit;
+                model.Compilation.GetSpecialType(SpecialType.System_Object)).IsImplicit;
     }
 
-
-    private static bool IsMatchingNameOf(
-        ExpressionSyntax expression,
-        ExpressionSyntax checkedExpression,
-        SyntaxNodeAnalysisContext context)
+    private static bool MatchesArgumentName(ExpressionSyntax expression, ExpressionSyntax checkedExpression,
+        SemanticModel model, CancellationToken token)
     {
-        if (context.SemanticModel.GetOperation(expression, context.CancellationToken) is not INameOfOperation nameOf)
+        var checkedSymbol = model.GetSymbolInfo(checkedExpression, token).Symbol;
+        if (checkedSymbol is null)
         {
             return false;
         }
 
-        var checkedSymbol = context.SemanticModel.GetSymbolInfo(checkedExpression, context.CancellationToken).Symbol;
-        var namedSymbol = context.SemanticModel.GetSymbolInfo(nameOf.Argument.Syntax, context.CancellationToken).Symbol;
-        return checkedSymbol is not null && SymbolEqualityComparer.Default.Equals(checkedSymbol, namedSymbol);
+        // Legacy parameter guards often spell the parameter name as a literal.
+        // Keep that literal and require the exact parameter name (including case).
+        if (expression.IsKind(SyntaxKind.StringLiteralExpression))
+        {
+            return checkedExpression is IdentifierNameSyntax && checkedSymbol is IParameterSymbol parameter &&
+                ((LiteralExpressionSyntax)expression).Token.ValueText == parameter.Name;
+        }
+
+        return model.GetOperation(expression, token) is INameOfOperation nameOf &&
+            SymbolEqualityComparer.Default.Equals(checkedSymbol, model.GetSymbolInfo(nameOf.Argument.Syntax, token).Symbol);
     }
 
     private static ExpressionSyntax WalkDownParentheses(ExpressionSyntax expression)

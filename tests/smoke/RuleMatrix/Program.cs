@@ -17,6 +17,8 @@ Console.WriteLine(string.Join("|", example.Sink, example.RedundantElse(false),
     string.Join(",", example.Chain(new[] { 1, 2, 50 })), example.ExpressionContains().Compile()("abc"),
     example.NullableGuard(null), example.NullableGuard(9), example.DeclaredPattern("abc"),
     example.DeclaredPattern(1), example.NestedTermination(true, false), example.NestedTermination(false, true)));
+// Providers inspect expression nodes without necessarily compiling the lambda.
+Console.WriteLine(example.ExpressionContains().Body.NodeType);
 Console.WriteLine(SafetyControls.Run());
 Console.WriteLine(RewriteControls.Run());
 

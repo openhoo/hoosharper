@@ -51,12 +51,21 @@ use its coverage command when adding analyzer/fixer paths.
   transformation; syntactically similar custom types are not interchangeable.
 - Test no-diagnostic cases for overloaded equality, nullable booleans,
   expression trees, unsupported C# versions, and side-effectful expressions.
+- For query rewrites, inspect the bound selector's conversion. A query method's
+  return type does not tell you whether its caller supplied an expression tree.
+- Account for `CallerArgumentExpression`: both rewriting its argument and
+  formatting an enclosing statement can change a string observed at runtime.
 - Preserve comments, directives, evaluation order, declaration scope, and
   disposal lifetime. Include malformed/incomplete editor code and trivia cases.
 - Collection rewrites require standard framework types and callback-stable
   receivers/keys/values. Do not assume a comparer has no side effects.
 - Fluent-chain edits preserve tabs, visual widths, CRLF, and existing multiline
   layout. HOO1020's specific line-length key overrides `max_line_length`.
+- Use `CodeFixTrivia` when formatting a changed subtree. Exercise
+  `indent_size = tab` with a nondefault tab width and check the indentation of
+  untouched neighboring statements. Return text changes relative to the
+  original document so Fix All can combine separate edits in one file. Check
+  new line breaks against both explicit settings and a CRLF file without one.
 
 ## Package verification
 
@@ -70,8 +79,10 @@ python3 scripts/verify-consumer.py artifacts/HooSharper.Analyzers.*.nupkg
 Build both projects before packing with `--no-build`. Inspect the `.nupkg` for
 both assemblies under `analyzers/dotnet/cs`; a compiler-only analyzer package
 does not prove IDE code-fix availability. For packaging changes install it into
-a disposable SDK-style consumer and verify a real HOO diagnostic plus a clean
-negative example. Keep local packages/build output out of Git.
+a disposable SDK-style consumer. `verify-consumer.py` builds an intentional
+HOO1006 violation, applies the packed fix with `dotnet format analyzers`, and
+checks that the corrected project builds cleanly. Keep local packages/build
+output out of Git.
 
 Report actual tests, coverage/package evidence where applicable, and any
 unavailable gates. Documentation/skill changes need link and installation checks;
@@ -89,4 +100,22 @@ ReSharper CLI, SDK, and an owned work directory; see README. Preserve raw report
 source/configuration/reference hashes, and analyzer/fixer assembly hashes. Review
 unmatched native opportunities before classifying them as defects. This command
 adapts only cloned SDK policy and comparison settings, and refuses modified C#
-sources. Native inspection results do not qualify interactive IDE quick-fix UI.
+sources. Run `scripts/verify-native-after.py` against the same evidence to
+inspect the actual rewritten source; the original comparison cannot reveal
+warnings introduced by otherwise valid fixes. Compare native warnings,
+project-supplied analyzer warnings, and compiler diagnostics separately.
+Native inspection results do not qualify interactive IDE quick-fix UI.
+For behavior changes, `scripts/verify-upstream-tests.py` also rebuilds pinned
+libraries. It compares original and rewritten outcomes for Serilog,
+FluentValidation and Polly.Core, plus Dapper's SQLite, DuckDB and wrapped-reader tests.
+It repeats Fix All on each original checkout and
+compares the final source hashes: zero diagnostics can hide different rewrites.
+It requires a fresh disposable directory.
+
+For Newtonsoft.Json, pass the paired native report and fixed-source directory
+to `scripts/verify-newtonsoft-tests.py`. It compares all named results and any
+baseline failure messages, and verifies the loaded assembly inside the test host.
+When a fix depends on compiler behavior, exercise the installed package on
+both the minimum SDK and the development SDK. Test CRLF files both with and
+without a configured line ending. The hosts' Roslyn operation models
+and the source text supplied for caller argument expressions can differ.

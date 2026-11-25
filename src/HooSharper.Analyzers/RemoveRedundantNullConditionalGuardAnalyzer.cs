@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Linq;
+using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -33,45 +34,40 @@ public sealed class RemoveRedundantNullConditionalGuardAnalyzer : DiagnosticAnal
 
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
     {
-        if (context.Node.SyntaxTree.Options is not CSharpParseOptions parseOptions ||
-            (parseOptions.LanguageVersion != LanguageVersion.Default &&
-             parseOptions.LanguageVersion < LanguageVersion.CSharp6))
+        var guard = (IfStatementSyntax)context.Node;
+        if (TryGetCandidate(guard, context.SemanticModel, context.CancellationToken, out _, out var location))
         {
-            return;
+            context.ReportIfUncaptured(Rule, location);
+        }
+    }
+
+    internal static bool TryGetCandidate(IfStatementSyntax guard, SemanticModel model, CancellationToken token,
+        out ExpressionStatementSyntax statement, out Location location)
+    {
+        statement = null!;
+        location = Location.None;
+        if (guard.SyntaxTree.Options is not CSharpParseOptions options ||
+            options.LanguageVersion != LanguageVersion.Default && options.LanguageVersion < LanguageVersion.CSharp6 ||
+            guard.ContainsDiagnostics || guard.Else is not null ||
+            (guard.Statement is BlockSyntax { Statements.Count: 1 } block ? block.Statements[0] : guard.Statement)
+                is not ExpressionStatementSyntax { Expression: ConditionalAccessExpressionSyntax access } body ||
+            HooSharper.Internal.ControlFlowScopeSafety.HasExpandedScopeCollision(guard.Statement, body) ||
+            HasDirective(guard) || HasComment(guard.Condition) ||
+            !TryGetNonNullCheckedReceiver(guard.Condition, model, token, out var receiver, out location) ||
+            !TryGetStableReceiverOperation(receiver, model, token, out var checkedOperation) ||
+            !TryGetStableReceiverOperation(access.Expression, model, token, out var accessedOperation) ||
+            !AreEquivalentReferences(checkedOperation, accessedOperation))
+        {
+            return false;
         }
 
-        var ifStatement = (IfStatementSyntax)context.Node;
-        if (ifStatement.Else is not null ||
-            ifStatement.Statement is not BlockSyntax { Statements.Count: 1 } block ||
-            block.Statements[0] is not ExpressionStatementSyntax
-            {
-                Expression: ConditionalAccessExpressionSyntax conditionalAccess,
-            } ||
-            HooSharper.Internal.ControlFlowScopeSafety.HasExpandedScopeCollision(block, block.Statements[0]) ||
-            HasDirective(ifStatement) ||
-            HasComment(ifStatement.Condition) ||
-            !TryGetNonNullCheckedReceiver(ifStatement.Condition, context, out var checkedReceiver, out var location) ||
-            !TryGetStableReceiverOperation(checkedReceiver, context.SemanticModel, context.CancellationToken,
-                out var checkedOperation) ||
-            !TryGetStableReceiverOperation(conditionalAccess.Expression, context.SemanticModel, context.CancellationToken,
-                out var accessedOperation))
-        {
-            return;
-        }
-
-        if (!AreEquivalentReferences(checkedOperation, accessedOperation))
-        {
-            return;
-        }
-
-        context.ReportDiagnostic(Diagnostic.Create(Rule, location));
+        statement = body;
+        return true;
     }
 
     private static bool TryGetNonNullCheckedReceiver(
-        ExpressionSyntax condition,
-        SyntaxNodeAnalysisContext context,
-        out ExpressionSyntax receiver,
-        out Location location)
+        ExpressionSyntax condition, SemanticModel semanticModel, CancellationToken cancellationToken,
+        out ExpressionSyntax receiver, out Location location)
     {
         condition = WalkDownParentheses(condition);
 
@@ -99,7 +95,7 @@ public sealed class RemoveRedundantNullConditionalGuardAnalyzer : DiagnosticAnal
                 OperatorToken: var operatorToken,
             } inequality &&
             HooSharper.Internal.NullComparisonSafety.IsSafeBinary(
-                context.SemanticModel.GetOperation(inequality, context.CancellationToken)))
+                semanticModel.GetOperation(inequality, cancellationToken)))
         {
             if (inequality.Left.IsKind(SyntaxKind.NullLiteralExpression))
             {
@@ -124,7 +120,7 @@ public sealed class RemoveRedundantNullConditionalGuardAnalyzer : DiagnosticAnal
     private static bool TryGetStableReceiverOperation(
         ExpressionSyntax expression,
         SemanticModel semanticModel,
-        System.Threading.CancellationToken cancellationToken,
+        CancellationToken cancellationToken,
         out IOperation operation)
     {
         expression = WalkDownParentheses(expression);

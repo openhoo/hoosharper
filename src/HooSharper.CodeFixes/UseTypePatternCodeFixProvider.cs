@@ -92,10 +92,9 @@ public sealed class UseTypePatternCodeFixProvider : CodeFixProvider
             .WithAdditionalAnnotations(Formatter.Annotation);
 
         var replacementBlock = block.WithStatements(
-                block.Statements.RemoveAt(declarationIndex).RemoveAt(declarationIndex).Insert(declarationIndex, replacementIf))
-            .WithAdditionalAnnotations(Formatter.Annotation);
+                block.Statements.RemoveAt(declarationIndex).RemoveAt(declarationIndex).Insert(declarationIndex, replacementIf));
 
-        return document.WithSyntaxRoot(root.ReplaceNode(block, replacementBlock));
+        return await CodeFixTrivia.FormatChangesAsync(document, root.ReplaceNode(block, replacementBlock), cancellationToken).ConfigureAwait(false);
     }
 
     private static ExpressionSyntax ParenthesizeIfNeeded(ExpressionSyntax expression) =>

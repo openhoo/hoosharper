@@ -39,7 +39,7 @@ public sealed class RemoveRedundantElseAnalyzer : DiagnosticAnalyzer
         }
 
         var elseClause = ifStatement.Else!;
-        context.ReportDiagnostic(Diagnostic.Create(Rule, elseClause.ElseKeyword.GetLocation()));
+        context.ReportIfUncaptured(Rule, elseClause.ElseKeyword.GetLocation(), ifStatement);
     }
 
 }

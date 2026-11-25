@@ -26,7 +26,11 @@ public sealed class RemoveRedundantNullConditionalGuardCodeFixProvider : CodeFix
         var ifStatement = root?.FindToken(diagnostic.Location.SourceSpan.Start).Parent?
             .AncestorsAndSelf().OfType<IfStatementSyntax>().FirstOrDefault();
 
-        if (ifStatement is null)
+        var model = await context.Document.GetSemanticModelAsync(context.CancellationToken).ConfigureAwait(false);
+        if (ifStatement is null || model is null ||
+            !RemoveRedundantNullConditionalGuardAnalyzer.TryGetCandidate(ifStatement, model,
+                context.CancellationToken, out var body, out _) ||
+            CallerArgumentExpressionSafety.IsCaptured(ifStatement, model, context.CancellationToken))
         {
             return;
         }
@@ -34,30 +38,18 @@ public sealed class RemoveRedundantNullConditionalGuardCodeFixProvider : CodeFix
         context.RegisterCodeFix(
             CodeAction.Create(
                 "Remove redundant null guard",
-                cancellationToken => ApplyFixAsync(context.Document, ifStatement, cancellationToken),
+                token => Task.FromResult(ApplyFix(context.Document, root!, ifStatement, body, token)),
                 nameof(RemoveRedundantNullConditionalGuardCodeFixProvider)),
             diagnostic);
     }
 
-    private static async Task<Document> ApplyFixAsync(
-        Document document,
-        IfStatementSyntax ifStatement,
-        CancellationToken cancellationToken)
+    private static Document ApplyFix(Document document, SyntaxNode root, IfStatementSyntax ifStatement,
+        ExpressionStatementSyntax expressionStatement, CancellationToken cancellationToken)
     {
-        var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
-        if (semanticModel is null ||
-            !HooSharper.Internal.NullComparisonSafety.IsSafeNullCheck(
-                ifStatement.Condition, semanticModel, cancellationToken))
+        if (ifStatement.Statement is not BlockSyntax block)
         {
-            return document;
-        }
-        if (root is null ||
-            ifStatement.Statement is not BlockSyntax { Statements.Count: 1 } block ||
-            block.Statements[0] is not ExpressionStatementSyntax expressionStatement ||
-            HooSharper.Internal.ControlFlowScopeSafety.HasExpandedScopeCollision(block, expressionStatement))
-        {
-            return document;
+            return document.WithSyntaxRoot(root.ReplaceNode(ifStatement,
+                CodeFixTrivia.UnwrapEmbeddedStatement(document, ifStatement, expressionStatement, cancellationToken)));
         }
 
         var leadingTrivia = ifStatement.GetLeadingTrivia()

@@ -45,9 +45,10 @@ public sealed class UseHashSetAddResultCodeFixProvider : CodeFixProvider
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        var block = ifStatement.Statement as BlockSyntax;
+        var firstStatement = block is null ? ifStatement.Statement : block.Statements.FirstOrDefault();
         if (root is null ||
-            ifStatement.Statement is not BlockSyntax { Statements.Count: > 0 } block ||
-            block.Statements[0] is not ExpressionStatementSyntax
+            firstStatement is not ExpressionStatementSyntax
             {
                 Expression: InvocationExpressionSyntax addInvocation,
             } addStatement)
@@ -56,7 +57,11 @@ public sealed class UseHashSetAddResultCodeFixProvider : CodeFixProvider
         }
 
         SyntaxNode replacement;
-        if (block.Statements.Count == 1)
+        if (block is null)
+        {
+            replacement = CodeFixTrivia.UnwrapEmbeddedStatement(document, ifStatement, addStatement, cancellationToken);
+        }
+        else if (block.Statements.Count == 1)
         {
             var leadingTrivia = ifStatement.GetLeadingTrivia()
                 .AddRange(CommentLines(ifStatement.IfKeyword.TrailingTrivia))
@@ -101,7 +106,7 @@ public sealed class UseHashSetAddResultCodeFixProvider : CodeFixProvider
                 .WithAdditionalAnnotations(Formatter.Annotation);
         }
 
-        return document.WithSyntaxRoot(root.ReplaceNode(ifStatement, replacement));
+        return await CodeFixTrivia.FormatChangesAsync(document, root.ReplaceNode(ifStatement, replacement), cancellationToken).ConfigureAwait(false);
     }
 
     private static SyntaxTriviaList CommentLines(SyntaxTriviaList trivia)

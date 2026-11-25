@@ -35,7 +35,7 @@ public sealed class UseNullCoalescingExpressionAnalyzer : DiagnosticAnalyzer
         var conditional = (ConditionalExpressionSyntax)context.Node;
         if (TryGetReplacementOperands(conditional, context.SemanticModel, context.CancellationToken, out _, out _))
         {
-            context.ReportDiagnostic(Diagnostic.Create(Rule, conditional.QuestionToken.GetLocation()));
+            context.ReportIfUncaptured(Rule, conditional.QuestionToken.GetLocation(), conditional);
         }
     }
 
@@ -67,6 +67,7 @@ public sealed class UseNullCoalescingExpressionAnalyzer : DiagnosticAnalyzer
         var checkedOperation = model.GetOperation(checkedTarget, token);
         var repeatedOperation = model.GetOperation(repeatedTarget, token);
         if (!IsStableSupportedTarget(checkedOperation) ||
+            ExpressionTreeSafety.IsQuoted(checkedOperation, model.Compilation) ||
             repeatedOperation is null ||
             !AreEquivalentReferences(checkedOperation!, repeatedOperation) ||
             HasUnpreservableSingleLineComment(conditional, checkedTarget, fallback))

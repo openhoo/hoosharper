@@ -79,7 +79,7 @@ public sealed class UseNullCoalescingExpressionCodeFixProvider : CodeFixProvider
             .WithTrailingTrivia(conditional.GetTrailingTrivia())
             .WithAdditionalAnnotations(Formatter.Annotation);
 
-        return document.WithSyntaxRoot(root.ReplaceNode(conditional, replacement));
+        return await CodeFixTrivia.FormatChangesAsync(document, root.ReplaceNode(conditional, replacement), cancellationToken).ConfigureAwait(false);
     }
 
     private static ExpressionSyntax PrepareFallback(ExpressionSyntax fallback)

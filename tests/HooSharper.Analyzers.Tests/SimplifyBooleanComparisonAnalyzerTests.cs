@@ -425,4 +425,35 @@ public sealed class SimplifyBooleanComparisonAnalyzerTests
         return VerifyCS.VerifyCodeFixAsync(source,
             VerifyCS.Diagnostic(SimplifyBooleanComparisonAnalyzer.DiagnosticId).WithLocation(0), fixedSource);
     }
+
+    [Theory]
+    [InlineData("Read(Flag == true)")]
+    [InlineData("Read((Flag == true))")]
+    [InlineData("Read(!Flag == false)")]
+    [InlineData("(Flag == true).Inspect()")]
+    public Task KeepsValueSnapshotForReadonlyReferenceArguments(string call) =>
+        VerifyCS.VerifyAnalyzerAsync($$"""
+            static class C
+            {
+                static bool Flag;
+                static bool Read(in bool snapshot) { Flag = false; return snapshot; }
+                static bool Inspect(this in bool snapshot) => Read(in snapshot);
+                static bool Run() { Flag = true; return {{call}}; }
+            }
+            """);
+
+    [Fact]
+    public Task CanStillNegateReadonlyReferenceArguments()
+    {
+        const string source = """
+            class C
+            {
+                static bool Read(in bool snapshot) => snapshot;
+                static bool Run(bool flag) => Read(flag {|#0:==|} false);
+            }
+            """;
+        return VerifyCS.VerifyCodeFixAsync(source,
+            VerifyCS.Diagnostic(SimplifyBooleanComparisonAnalyzer.DiagnosticId).WithLocation(0),
+            source.Replace("flag {|#0:==|} false", "!flag"));
+    }
 }

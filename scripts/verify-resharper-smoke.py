@@ -19,7 +19,7 @@ import stat
 import subprocess
 import tempfile
 
-from smoke_support import capture as capture_process, verify_runtime
+from smoke_support import capture as capture_process, validate_export_newlines, verify_runtime
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +34,12 @@ PROJECTS = [
     ("serilog", "Serilog", "https://github.com/serilog/serilog.git", "v4.0.0",
      "573a62874260d7a1708f620076b5469f69bc79b3", "src/Serilog/Serilog.csproj",
      {"TargetFramework": "net8.0", "TargetFrameworks": "net8.0"}, "global.json"),
+    ("fluentvalidation", "FluentValidation", "https://github.com/FluentValidation/FluentValidation.git", "11.11.0",
+     "c8c6400fa2f467d65669b78804613d44066c1c33", "src/FluentValidation/FluentValidation.csproj",
+     {"TargetFramework": "net8.0", "TargetFrameworks": "net8.0"}, "global.json"),
+    ("polly", "Polly", "https://github.com/App-vNext/Polly.git", "8.5.2",
+     "a953ba8119074d7f63cc69643d4ef1d1de52ee3f", "src/Polly.Core/Polly.Core.csproj",
+     {"TargetFramework": "net8.0", "TargetFrameworks": "net8.0", "UseArtifactsOutput": "false"}, "global.json"),
 ]
 SETTINGS = """[*.cs]
 csharp_prefer_braces = false:suggestion
@@ -43,6 +49,17 @@ resharper_use_throw_if_null_method_highlighting = hint
 max_line_length = 140
 hoosharper_max_line_length = 140
 """
+
+
+def check_assembly_hashes(work, names):
+    expected = None
+    for name in names:
+        report = json.loads((work / f"{name}-hoosharper.json").read_text())
+        actual = {key: report[key] for key in ("analyzerSha256", "fixerSha256")}
+        if expected is not None and actual != expected:
+            raise RuntimeError(f"{name}: analyzer or fixer assembly changed during qualification")
+        expected = actual
+    return expected
 
 
 def capture(command, log, environment):
@@ -55,7 +72,9 @@ def smoke(name, project, properties, work, args, environment, fixed=None):
     hoo_report.unlink(missing_ok=True)
     command = [args.dotnet, str(smoke), str(project), str(hoo_report), "--fix-all"]
     if name == "matrix":
-        command += ["--require-all-rules", "--write-fixed", str(fixed)]
+        command += ["--require-all-rules"]
+    if fixed is not None:
+        command += ["--write-fixed", str(fixed)]
     for key, value in properties.items():
         command += ["--property", f"{key}={value}"]
     capture(command, work / f"{name}-smoke.log", environment)
@@ -74,7 +93,8 @@ def inspect(name, project, properties, work, args, environment, fixed=None):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.capture_path(reference_report).unlink(missing_ok=True)
-    module.validate_hoo_inputs(json.loads(hoo_report.read_text()))
+    hoo = json.loads(hoo_report.read_text())
+    module.validate_hoo_inputs(hoo)
     command = [args.jb, "inspectcode", str(project), "--no-build", "--severity=HINT",
                "--format=Xml", f"--output={reference_report}", "--jobs=1", "--no-updates",
                "--no-buildin-settings", f"--dotnetcore={args.dotnet}"]
@@ -87,6 +107,8 @@ def inspect(name, project, properties, work, args, environment, fixed=None):
         raise RuntimeError(f"Native inspection did not produce a fresh report: {reference_report}")
     module.record_native_capture(hoo_report, reference_report)
     report = module.compare(hoo_report, reference_report)
+    if fixed is not None:
+        report["exportLineEndings"] = validate_export_newlines(fixed, hoo)
     (work / f"{name}-parity.json").write_text(json.dumps(report, indent=2) + "\n")
     return report
 
@@ -203,6 +225,8 @@ def main():
     parser.add_argument("--dotnet", default=shutil.which("dotnet"))
     parser.add_argument("--jb", default=shutil.which("jb"))
     parser.add_argument("--work-dir", type=Path, default=ROOT / "artifacts/resharper-smoke")
+    parser.add_argument("--project", choices=[item[0] for item in PROJECTS], action="append",
+                        help="run only this library and the executable matrix; repeat to select multiple libraries")
     args = parser.parse_args()
     if not args.dotnet or not args.jb:
         parser.error("--dotnet and --jb must identify installed tools")
@@ -216,7 +240,7 @@ def main():
                        PATH=str(Path(args.dotnet).parent) + os.pathsep + os.environ["PATH"])
     capture([args.dotnet, "--version"], work / "sdk-version.log", environment)
     capture([args.jb, "inspectcode", "--version"], work / "resharper-version.log", environment)
-    if "2026.2.3.1" not in (work / "resharper-version.log").read_text():
+    if "Version: 2026.2.3.1" not in (work / "resharper-version.log").read_text().splitlines():
         raise RuntimeError("This comparison is pinned to ReSharper 2026.2.3.1")
     capture([args.dotnet, "build", str(ROOT / "tools/HooSharper.SmokeTests/HooSharper.SmokeTests.csproj"), "-c", "Release", "-m:1"],
             work / "smoke-tool-build.log", environment)
@@ -227,9 +251,14 @@ def main():
     provenance = {}
     runtime = verify_runtime(ROOT, work, fixed, args.dotnet, environment)
     portable = {}
+    exports = {}
     for item in PROJECTS:
+        if args.project and item[0] not in args.project:
+            continue
         name, project, properties, source = prepare_project(item, work, environment)
-        reports[name] = inspect(name, project, properties, work, args, environment)
+        fixed_library = Path(tempfile.mkdtemp(prefix=f"{name}-fixed-", dir=work))
+        reports[name] = inspect(name, project, properties, work, args, environment, fixed_library)
+        exports[name] = str(fixed_library)
         provenance[name] = source
         portable_properties = dict(properties, TargetFramework="netstandard2.0")
         if name == "newtonsoft":
@@ -245,10 +274,11 @@ def main():
         portable[name] = {"framework": "netstandard2.0", "documents": portable_report["documents"],
                           "findings": len(portable_report["findings"]), "passed": portable_report["passed"],
                           "cumulativeRounds": portable_report["cumulativeRounds"]}
-    summary = {"passed": True, "developmentSdk": (work / "sdk-version.log").read_text().strip(),
+    assemblies = check_assembly_hashes(work, [*reports, *(f"{name}-netstandard" for name in portable)])
+    summary = {"passed": True, "assemblies": assemblies, "developmentSdk": (work / "sdk-version.log").read_text().strip(),
                "referenceVersion": "2026.2.3.1", "sources": provenance,
-               "runtime": runtime, "portableTargets": portable, "projects": {name: {key: report[key] for key in
-                   ["documents", "hooFindings", "nativeReferenceFindings", "referenceFindings"]}
+               "runtime": runtime, "fixedSourceDirectories": exports, "portableTargets": portable, "projects": {name: {key: report[key] for key in
+                   ["documents", "hooFindings", "nativeReferenceFindings", "referenceFindings", "exportLineEndings"]}
                    for name, report in reports.items()}}
     (work / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary, indent=2))

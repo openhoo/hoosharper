@@ -63,7 +63,7 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
             return document;
         }
 
-        var negatedCondition = Negate(
+        var negatedCondition = GuardCondition.Negate(
                 ifStatement.Condition,
                 semanticModel,
                 cancellationToken)
@@ -77,6 +77,9 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
 
         var movedStatements = body.Statements.ToList();
         PreserveSignificantTrivia(body, ifStatement, movedStatements);
+        if (movedStatements.Count != 0 && CodeFixTrivia.StartsWithLineComment(movedStatements[0]) &&
+            ProjectStylePolicy.IsEnabled(semanticModel.Compilation.Options, ifStatement.SyntaxTree, "SA1515", cancellationToken))
+            movedStatements[0] = CodeFixTrivia.WithBlankLineBefore(movedStatements[0], guard, ifStatement);
 
         var replacementStatements = new List<StatementSyntax> { guard };
         replacementStatements.AddRange(movedStatements);
@@ -87,11 +90,9 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
             return document;
         }
 
-        var newParentBlock = parentBlock.WithStatements(
-                parentBlock.Statements.RemoveAt(index).InsertRange(index, replacementStatements))
-            .WithAdditionalAnnotations(Formatter.Annotation);
+        var newParentBlock = CodeFixTrivia.ReplaceWithStatements(parentBlock, index, replacementStatements);
 
-        return document.WithSyntaxRoot(root.ReplaceNode(parentBlock, newParentBlock));
+        return await CodeFixTrivia.FormatChangesAsync(document, root.ReplaceNode(parentBlock, newParentBlock), cancellationToken).ConfigureAwait(false);
     }
     private static void PreserveSignificantTrivia(
         BlockSyntax body,
@@ -124,79 +125,4 @@ public sealed class PreferLoopContinueCodeFixProvider : CodeFixProvider
 
     private static bool HasSignificantTrivia(IEnumerable<SyntaxTrivia> trivia) =>
         trivia.Any(item => !item.IsKind(SyntaxKind.WhitespaceTrivia) && !item.IsKind(SyntaxKind.EndOfLineTrivia));
-
-    private static ExpressionSyntax Negate(
-        ExpressionSyntax condition,
-        SemanticModel semanticModel,
-        CancellationToken cancellationToken)
-    {
-        var originalCondition = condition;
-        condition = WalkDownParentheses(condition);
-        if (condition != originalCondition &&
-            HasSignificantTrivia(originalCondition.DescendantTrivia(descendIntoTrivia: true)))
-        {
-            // Removing these parentheses would also remove comments attached
-            // to their interior operand edges.
-            return ParenthesizedNegation(originalCondition);
-        }
-
-        return condition switch
-        {
-            PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression } logicalNot
-                when condition == originalCondition &&
-                    IsBuiltInLogicalNot(logicalNot, semanticModel, cancellationToken) &&
-                    !HasSignificantTrivia(logicalNot.DescendantTrivia(descendIntoTrivia: true)) =>
-                WalkDownParentheses(logicalNot.Operand).WithoutTrivia(),
-            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.EqualsExpression) &&
-                IsBuiltInEquality(binary, semanticModel, cancellationToken) =>
-                ReplaceOperator(binary.WithoutTrivia(), SyntaxKind.NotEqualsExpression, SyntaxKind.ExclamationEqualsToken),
-            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.NotEqualsExpression) &&
-                IsBuiltInEquality(binary, semanticModel, cancellationToken) =>
-                ReplaceOperator(binary.WithoutTrivia(), SyntaxKind.EqualsExpression, SyntaxKind.EqualsEqualsToken),
-            IdentifierNameSyntax or MemberAccessExpressionSyntax or InvocationExpressionSyntax =>
-                SyntaxFactory.PrefixUnaryExpression(SyntaxKind.LogicalNotExpression, condition.WithoutTrivia()),
-            _ => ParenthesizedNegation(originalCondition),
-        };
-    }
-
-    private static bool IsBuiltInLogicalNot(
-        PrefixUnaryExpressionSyntax expression,
-        SemanticModel semanticModel,
-        CancellationToken cancellationToken) =>
-        semanticModel.GetOperation(expression, cancellationToken) is
-            Microsoft.CodeAnalysis.Operations.IUnaryOperation { OperatorMethod: null };
-
-    private static bool IsBuiltInEquality(
-        BinaryExpressionSyntax expression,
-        SemanticModel semanticModel,
-        CancellationToken cancellationToken) =>
-        semanticModel.GetOperation(expression, cancellationToken) is
-            Microsoft.CodeAnalysis.Operations.IBinaryOperation { OperatorMethod: null };
-
-    private static BinaryExpressionSyntax ReplaceOperator(
-        BinaryExpressionSyntax expression,
-        SyntaxKind expressionKind,
-        SyntaxKind tokenKind) =>
-        SyntaxFactory.BinaryExpression(
-            expressionKind,
-            expression.Left,
-            SyntaxFactory.Token(tokenKind).WithTriviaFrom(expression.OperatorToken),
-            expression.Right);
-
-    private static ExpressionSyntax WalkDownParentheses(ExpressionSyntax expression)
-    {
-        while (expression is ParenthesizedExpressionSyntax parenthesized)
-        {
-            expression = parenthesized.Expression;
-        }
-
-        return expression;
-    }
-
-    private static PrefixUnaryExpressionSyntax ParenthesizedNegation(ExpressionSyntax condition) =>
-        SyntaxFactory.PrefixUnaryExpression(
-            SyntaxKind.LogicalNotExpression,
-            // The caller restores the original condition's edge trivia on the
-            // complete negation. Keeping it here as well duplicates comments.
-            SyntaxFactory.ParenthesizedExpression(condition.WithoutTrivia()));
 }

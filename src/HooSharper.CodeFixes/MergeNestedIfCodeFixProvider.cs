@@ -10,7 +10,6 @@ using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Microsoft.CodeAnalysis.Formatting;
 
 namespace HooSharper.CodeFixes;
 
@@ -28,15 +27,10 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
         var outerIf = root?.FindToken(diagnostic.Location.SourceSpan.Start).Parent?
             .AncestorsAndSelf().OfType<IfStatementSyntax>().FirstOrDefault();
 
-        if (!TryGetInnerIf(outerIf, out _) || MergeNestedIfAnalyzer.IntroducesDeclarationCollision(outerIf!))
-        {
-            return;
-        }
-
         var semanticModel = await context.Document.GetSemanticModelAsync(context.CancellationToken)
             .ConfigureAwait(false);
-        if (semanticModel is null ||
-            !AreAllConditionsOrdinaryBoolean(semanticModel, outerIf!, context.CancellationToken))
+        if (outerIf is null || semanticModel is null ||
+            !MergeNestedIfAnalyzer.CanMerge(outerIf, semanticModel, context.CancellationToken))
         {
             return;
         }
@@ -44,7 +38,7 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
         context.RegisterCodeFix(
             CodeAction.Create(
                 "Merge nested if statements",
-                cancellationToken => ApplyFixAsync(context.Document, outerIf!, cancellationToken),
+                cancellationToken => ApplyFixAsync(context.Document, outerIf, cancellationToken),
                 nameof(MergeNestedIfCodeFixProvider)),
             diagnostic);
     }
@@ -55,14 +49,14 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-        if (root is null || outerIf.ContainsDirectives || !TryGetInnerIf(outerIf, out var innerIf))
+        if (root is null || !MergeNestedIfAnalyzer.TryGetInnerIf(outerIf, out var innerIf))
         {
             return document;
         }
 
         var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
         if (semanticModel is null ||
-            !AreAllConditionsOrdinaryBoolean(semanticModel, outerIf, cancellationToken))
+            !MergeNestedIfAnalyzer.CanMerge(outerIf, semanticModel, cancellationToken))
         {
             return document;
         }
@@ -77,7 +71,7 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
                 SyntaxFactory.Token(SyntaxKind.AmpersandAmpersandToken),
                 PrepareOperand(deepestIf.Condition, isRightOperand: true));
 
-            if (!TryGetInnerIf(deepestIf, out var nextIf))
+            if (!MergeNestedIfAnalyzer.TryGetInnerIf(deepestIf, out var nextIf))
             {
                 break;
             }
@@ -92,11 +86,10 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
             .WithCloseParenToken(outerIf.CloseParenToken.WithTrailingTrivia())
             .WithStatement(mergedStatement)
             .WithElse(null)
-            .WithLeadingTrivia(PreserveRemovedComments(outerIf, innerIf, deepestIf))
-            .WithTrailingTrivia(CodeFixTrivia.TrailingAfterUnwrapping(deepestIf.Statement, outerIf))
-            .WithAdditionalAnnotations(Formatter.Annotation);
+            .WithLeadingTrivia(PreserveRemovedComments(outerIf, deepestIf))
+            .WithTrailingTrivia(CodeFixTrivia.TrailingAfterUnwrapping(deepestIf.Statement, outerIf));
 
-        return document.WithSyntaxRoot(root.ReplaceNode(outerIf, replacement));
+        return await CodeFixTrivia.ReplaceAndFormatAsync(document, root, outerIf, replacement, cancellationToken).ConfigureAwait(false);
     }
 
     private static ExpressionSyntax PrepareOperand(
@@ -122,14 +115,14 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
             LambdaExpressionSyntax or AnonymousMethodExpressionSyntax or QueryExpressionSyntax;
     }
 
-    private static SyntaxTriviaList PreserveRemovedComments(IfStatementSyntax outerIf, IfStatementSyntax innerIf, IfStatementSyntax deepestIf)
+    private static SyntaxTriviaList PreserveRemovedComments(IfStatementSyntax outerIf, IfStatementSyntax deepestIf)
     {
         var leading = outerIf.GetLeadingTrivia();
         var indentation = SyntaxFactory.TriviaList(
             leading.Where(static trivia => trivia.IsKind(SyntaxKind.WhitespaceTrivia)));
         var conditions = new List<ExpressionSyntax> { outerIf.Condition };
         var current = outerIf;
-        while (TryGetInnerIf(current, out var nested))
+        while (MergeNestedIfAnalyzer.TryGetInnerIf(current, out var nested))
         {
             conditions.Add(nested.Condition);
             current = nested;
@@ -156,42 +149,5 @@ public sealed class MergeNestedIfCodeFixProvider : CodeFixProvider
         }
 
         return leading;
-    }
-
-    private static bool AreAllConditionsOrdinaryBoolean(
-        SemanticModel semanticModel,
-        IfStatementSyntax outerIf,
-        CancellationToken cancellationToken)
-    {
-        var current = outerIf;
-        while (true)
-        {
-            if (semanticModel.GetTypeInfo(current.Condition, cancellationToken).Type?.SpecialType !=
-                SpecialType.System_Boolean)
-            {
-                return false;
-            }
-
-            if (!TryGetInnerIf(current, out var innerIf))
-            {
-                return true;
-            }
-
-            current = innerIf;
-        }
-    }
-
-    private static bool TryGetInnerIf(IfStatementSyntax? outerIf, out IfStatementSyntax innerIf)
-    {
-        if (outerIf?.Else is null &&
-            outerIf?.Statement is BlockSyntax { Statements.Count: 1 } block &&
-            block.Statements[0] is IfStatementSyntax { Else: null } candidate)
-        {
-            innerIf = candidate;
-            return true;
-        }
-
-        innerIf = null!;
-        return false;
     }
 }

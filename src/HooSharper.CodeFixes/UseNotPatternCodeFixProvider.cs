@@ -37,7 +37,7 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
 
         context.RegisterCodeFix(
             CodeAction.Create(
-                "Use not pattern",
+                "Simplify negated pattern",
                 cancellationToken => ApplyFixAsync(context.Document, logicalNot!, cancellationToken),
                 nameof(UseNotPatternCodeFixProvider)),
             diagnostic);
@@ -83,20 +83,21 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
             .AddRange(parenthesized.OpenParenToken.LeadingTrivia)
             .AddRange(parenthesized.OpenParenToken.TrailingTrivia)
             .AddRange(target.GetLeadingTrivia());
-        var notKeyword = SyntaxFactory.Token(SyntaxKind.NotKeyword)
-            .WithLeadingTrivia(pattern.GetLeadingTrivia());
-        pattern = pattern.WithoutLeadingTrivia().WithoutTrailingTrivia();
-        if (pattern is BinaryPatternSyntax or UnaryPatternSyntax)
-        {
-            pattern = SyntaxFactory.ParenthesizedPattern(pattern);
-        }
-
-        var negatedPattern = SyntaxFactory.UnaryPattern(notKeyword, pattern.WithLeadingTrivia(SyntaxFactory.Space));
         var trailingTrivia = EnsureCommentLineBreaks(
             GetOriginalPattern(logicalNot).GetTrailingTrivia()
                 .AddRange(parenthesized.CloseParenToken.LeadingTrivia)
                 .AddRange(logicalNot.GetTrailingTrivia()));
+        var negatedPattern = NegatePattern(pattern, ref isKeyword, ref trailingTrivia);
         ExpressionSyntax replacement = SyntaxFactory.IsPatternExpression(target.WithoutLeadingTrivia(), isKeyword, negatedPattern);
+        if (negatedPattern is TypePatternSyntax or ConstantPatternSyntax { Expression: NameSyntax or MemberAccessExpressionSyntax })
+        {
+            // The same bare name can denote a type or a constant. Roslyn parses
+            // "x is T" differently from "x is not T"; keep the editor tree in
+            // the same shape it will have when the document is reopened.
+            var parsed = SyntaxFactory.ParseExpression("x is " + negatedPattern.ToFullString(), options: logicalNot.SyntaxTree.Options);
+            if (parsed is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.IsExpression } typeTest)
+                replacement = typeTest.WithLeft(target.WithoutLeadingTrivia()).WithOperatorToken(isKeyword);
+        }
         // "is" binds less tightly than a cast or unary operator. Preserve the
         // original grouping in expression contexts unless they already delimit it.
         if (parent is ExpressionSyntax and not (ParenthesizedExpressionSyntax or AssignmentExpressionSyntax or
@@ -112,18 +113,62 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
             .WithTrailingTrivia(trailingTrivia);
     }
 
+    private static PatternSyntax NegatePattern(PatternSyntax pattern, ref SyntaxToken isKeyword, ref SyntaxTriviaList trailing)
+    {
+        var inner = pattern;
+        var negations = 0;
+        while (true)
+        {
+            if (inner is ParenthesizedPatternSyntax group)
+                inner = group.Pattern;
+            else if (inner is UnaryPatternSyntax unary && unary.IsKind(SyntaxKind.NotPattern))
+            {
+                negations++;
+                inner = unary.Pattern;
+            }
+            else
+                break;
+        }
+
+        if (negations == 0)
+        {
+            var keyword = SyntaxFactory.Token(SyntaxKind.NotKeyword).WithLeadingTrivia(pattern.GetLeadingTrivia());
+            return AddNot(keyword, pattern.WithoutTrivia());
+        }
+
+        // Drop pairs of negations, retaining comments attached to the removed
+        // keywords or parentheses on the corresponding side of the pattern.
+        var prefix = MergeTrivia(isKeyword.TrailingTrivia,
+            pattern.DescendantTrivia().Where(t => t.Span.End <= inner.SpanStart));
+        isKeyword = isKeyword.WithTrailingTrivia(prefix.Count == 0 ? SyntaxFactory.TriviaList(SyntaxFactory.Space) : prefix);
+        var suffix = pattern.DescendantTrivia().Where(t => t.SpanStart >= inner.Span.End && t.SpanStart < pattern.Span.End);
+        trailing = MergeTrivia(SyntaxFactory.TriviaList(suffix), trailing);
+        return negations % 2 == 1 ? inner.WithoutTrivia() : AddNot(SyntaxFactory.Token(SyntaxKind.NotKeyword), inner.WithoutTrivia());
+    }
+
+    private static UnaryPatternSyntax AddNot(SyntaxToken keyword, PatternSyntax operand)
+    {
+        if (operand is BinaryPatternSyntax)
+            operand = SyntaxFactory.ParenthesizedPattern(operand);
+        return SyntaxFactory.UnaryPattern(keyword, operand.WithLeadingTrivia(SyntaxFactory.Space));
+    }
+
+    private static SyntaxTriviaList MergeTrivia(SyntaxTriviaList left, IEnumerable<SyntaxTrivia> right)
+    {
+        foreach (var item in right)
+        {
+            if (!item.IsKind(SyntaxKind.WhitespaceTrivia) || !left.LastOrDefault().IsKind(SyntaxKind.WhitespaceTrivia))
+                left = left.Add(item);
+        }
+        return left;
+    }
+
     private sealed class NestedNotPatternRewriter(
         SemanticModel semanticModel,
         CancellationToken cancellationToken) : CSharpSyntaxRewriter
     {
         internal bool CanRewrite(PrefixUnaryExpressionSyntax node) =>
-            node.SyntaxTree.Options is CSharpParseOptions parseOptions &&
-            (parseOptions.LanguageVersion == LanguageVersion.Default ||
-             parseOptions.LanguageVersion >= LanguageVersion.CSharp9) &&
-            node.IsKind(SyntaxKind.LogicalNotExpression) &&
-            !node.ContainsDiagnostics &&
-            TryGetParts(node, out var target, out _, out _) &&
-            !IsWithinExpressionTree(node) && IsSupportedTypeTest(node, target);
+            UseNotPatternAnalyzer.CanRewrite(node, semanticModel, cancellationToken);
 
         public override SyntaxNode? VisitPrefixUnaryExpression(PrefixUnaryExpressionSyntax node)
         {
@@ -136,79 +181,6 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
                 : visited;
         }
 
-        private bool IsWithinExpressionTree(SyntaxNode node)
-        {
-            var expressionType = semanticModel.Compilation.GetTypeByMetadataName("System.Linq.Expressions.Expression`1");
-            var queryableType = semanticModel.Compilation.GetTypeByMetadataName("System.Linq.IQueryable");
-            for (var ancestor = node.Parent; ancestor is not null; ancestor = ancestor.Parent)
-            {
-                if (expressionType is not null && ancestor is AnonymousFunctionExpressionSyntax lambda &&
-                    semanticModel.GetTypeInfo(lambda, cancellationToken).ConvertedType is INamedTypeSymbol lambdaType &&
-                    SymbolEqualityComparer.Default.Equals(lambdaType.OriginalDefinition, expressionType))
-                {
-                    return true;
-                }
-
-                if (queryableType is not null && ancestor is QueryExpressionSyntax query &&
-                    semanticModel.GetTypeInfo(query, cancellationToken).Type is INamedTypeSymbol queryType &&
-                    (SymbolEqualityComparer.Default.Equals(queryType.OriginalDefinition, queryableType) ||
-                     queryType.AllInterfaces.Any(type => SymbolEqualityComparer.Default.Equals(
-                         type.OriginalDefinition, queryableType))))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private bool IsSupportedTypeTest(PrefixUnaryExpressionSyntax node, ExpressionSyntax target)
-        {
-            var expression = ((ParenthesizedExpressionSyntax)node.Operand).Expression;
-            var type = expression switch
-            {
-                IsPatternExpressionSyntax { Pattern: TypePatternSyntax pattern } => pattern.Type,
-                IsPatternExpressionSyntax { Pattern: DeclarationPatternSyntax pattern } => pattern.Type,
-                BinaryExpressionSyntax { Right: TypeSyntax testedType } => testedType,
-                _ => null,
-            };
-            if (type is null)
-            {
-                return true;
-            }
-
-            var targetType = semanticModel.GetTypeInfo(target, cancellationToken).Type;
-            var matchedType = semanticModel.GetTypeInfo(type, cancellationToken).Type;
-            if (targetType is null || matchedType is null ||
-                targetType.TypeKind == TypeKind.Error || matchedType.TypeKind == TypeKind.Error)
-            {
-                return false;
-            }
-
-            var nullableTarget = targetType is INamedTypeSymbol
-            {
-                OriginalDefinition.SpecialType: SpecialType.System_Nullable_T,
-            };
-            var effectiveTarget = nullableTarget
-                ? ((INamedTypeSymbol)targetType).TypeArguments[0]
-                : targetType;
-            if (effectiveTarget.TypeKind == TypeKind.Dynamic)
-            {
-                effectiveTarget = semanticModel.Compilation.GetSpecialType(SpecialType.System_Object);
-            }
-            var conversion = semanticModel.Compilation.ClassifyConversion(effectiveTarget, matchedType);
-            // Negating an always-matching value-type test creates a prohibited pattern.
-            if (!nullableTarget && targetType.IsValueType &&
-                (conversion.IsIdentity || conversion.IsBoxing && conversion.IsImplicit))
-            {
-                return false;
-            }
-
-            // Legacy is-type expressions allow impossible tests as warnings; not patterns
-            // require compatible types and turn these expressions into compiler errors.
-            return conversion.IsIdentity || conversion.IsReference || conversion.IsBoxing || conversion.IsUnboxing ||
-                effectiveTarget.TypeKind == TypeKind.TypeParameter || matchedType.TypeKind == TypeKind.TypeParameter;
-        }
     }
 
     private static bool TryGetParts(
@@ -228,7 +200,7 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
 
         switch (expression)
         {
-            case IsPatternExpressionSyntax isPattern when IsSupportedPattern(isPattern.Pattern):
+            case IsPatternExpressionSyntax isPattern when UseNotPatternAnalyzer.IsSupportedPattern(isPattern.Pattern):
                 target = isPattern.Expression;
                 isKeyword = isPattern.IsKeyword;
                 pattern = isPattern.Pattern;
@@ -280,13 +252,4 @@ public sealed class UseNotPatternCodeFixProvider : CodeFixProvider
 
         return SyntaxFactory.TriviaList(result);
     }
-
-    private static bool ContainsDesignation(PatternSyntax pattern) =>
-        pattern.DescendantNodesAndSelf().Any(node => node is VariableDesignationSyntax);
-
-    private static bool IsSupportedPattern(PatternSyntax pattern) =>
-        pattern is DeclarationPatternSyntax
-        {
-            Designation: SingleVariableDesignationSyntax { Identifier.IsMissing: false } or DiscardDesignationSyntax,
-        } || !ContainsDesignation(pattern);
 }

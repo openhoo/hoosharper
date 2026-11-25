@@ -41,8 +41,9 @@ merely to introduce one analyzer.
 
 1. Restore/build the consuming project and confirm the expected HOO ID appears
    on an intentional example. Check its effective EditorConfig severity.
-2. Use the IDE's Quick Actions for the matching HooSharper fix. A command-line
-   `dotnet build` reports diagnostics; it does not rewrite source.
+2. Use the IDE's Quick Actions for the matching HooSharper fix. From the CLI,
+   `dotnet format analyzers MyProject.csproj --diagnostics HOO1006 --severity info`
+   applies the packaged boolean comparison fix across one project.
 3. Review the resulting diff for comments, evaluation order, and scope. Run the
    consuming project's normal build/tests. For broad Fix All, begin with a
    document or bounded project before expanding to a solution.

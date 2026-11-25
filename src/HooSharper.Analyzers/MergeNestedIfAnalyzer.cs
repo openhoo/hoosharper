@@ -34,24 +34,25 @@ public sealed class MergeNestedIfAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
     {
         var outerIf = (IfStatementSyntax)context.Node;
-        if (outerIf.ContainsDiagnostics ||
-            !TryGetInnerIf(outerIf, out var innerIf) ||
-            outerIf.ContainsDirectives ||
-            IsNestedEligibleIf(outerIf) ||
-            !AreAllConditionsOrdinaryBoolean(context, outerIf) ||
-            IntroducesDeclarationCollision(outerIf))
+        if (!CanMerge(outerIf, context.SemanticModel, context.CancellationToken) ||
+            HasMergingParent(outerIf, context.SemanticModel, context.CancellationToken))
         {
             return;
         }
 
-        context.ReportDiagnostic(Diagnostic.Create(Rule, outerIf.IfKeyword.GetLocation()));
+        context.ReportIfUncaptured(Rule, outerIf.IfKeyword.GetLocation(), outerIf);
     }
 
-    private static bool TryGetInnerIf(IfStatementSyntax outerIf, out IfStatementSyntax innerIf)
+    internal static bool CanMerge(IfStatementSyntax outerIf, SemanticModel model, System.Threading.CancellationToken token) =>
+        TryGetInnerIf(outerIf, out _) && !outerIf.ContainsDiagnostics && !outerIf.ContainsDirectives &&
+        AreAllConditionsOrdinaryBoolean(outerIf, model, token) && !IntroducesDeclarationCollision(outerIf);
+
+    internal static bool TryGetInnerIf(IfStatementSyntax outerIf, out IfStatementSyntax innerIf)
     {
-        if (outerIf.Else is null &&
-            outerIf.Statement is BlockSyntax { Statements.Count: 1 } block &&
-            block.Statements[0] is IfStatementSyntax { Else: null } candidate)
+        var statement = outerIf.Statement is BlockSyntax { Statements.Count: 1 } block
+            ? block.Statements[0]
+            : outerIf.Statement;
+        if (outerIf.Else is null && statement is IfStatementSyntax { Else: null } candidate)
         {
             innerIf = candidate;
             return true;
@@ -61,9 +62,12 @@ public sealed class MergeNestedIfAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    private static bool IsNestedEligibleIf(IfStatementSyntax statement) =>
-        statement.Parent is BlockSyntax { Statements.Count: 1 } block &&
-        block.Parent is IfStatementSyntax { Else: null };
+    private static bool HasMergingParent(IfStatementSyntax statement, SemanticModel model, System.Threading.CancellationToken token)
+    {
+        var parent = statement.Parent is BlockSyntax block ? block.Parent : statement.Parent;
+        return parent is IfStatementSyntax parentIf && TryGetInnerIf(parentIf, out var child) &&
+            child == statement && CanMerge(parentIf, model, token);
+    }
 
     internal static bool IntroducesDeclarationCollision(IfStatementSyntax outerIf)
     {
@@ -163,13 +167,12 @@ public sealed class MergeNestedIfAnalyzer : DiagnosticAnalyzer
     }
 
     private static bool AreAllConditionsOrdinaryBoolean(
-        SyntaxNodeAnalysisContext context,
-        IfStatementSyntax outerIf)
+        IfStatementSyntax outerIf, SemanticModel model, System.Threading.CancellationToken token)
     {
         var current = outerIf;
         while (true)
         {
-            if (context.SemanticModel.GetTypeInfo(current.Condition, context.CancellationToken).Type?.SpecialType !=
+            if (model.GetTypeInfo(current.Condition, token).Type?.SpecialType !=
                 SpecialType.System_Boolean)
             {
                 return false;

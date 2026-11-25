@@ -51,7 +51,10 @@ public sealed class UseDictionaryTryAddAnalyzer : DiagnosticAnalyzer
         INamedTypeSymbol equalityComparerDefinition)
     {
         var ifStatement = (IfStatementSyntax)context.Node;
-        if (ifStatement.Else is not null || HasDirective(ifStatement) ||
+        var firstStatement = ifStatement.Statement is BlockSyntax body
+            ? body.Statements.FirstOrDefault()
+            : ifStatement.Statement;
+        if (ifStatement.ContainsDiagnostics || ifStatement.Else is not null || HasDirective(ifStatement) ||
             ifStatement.Condition is not PrefixUnaryExpressionSyntax
             {
                 RawKind: (int)SyntaxKind.LogicalNotExpression,
@@ -65,8 +68,7 @@ public sealed class UseDictionaryTryAddAnalyzer : DiagnosticAnalyzer
                 } containsInvocation,
             } ||
             containsInvocation.ArgumentList.Arguments.Count != 1 ||
-            ifStatement.Statement is not BlockSyntax { Statements.Count: > 0 } block ||
-            block.Statements[0] is not ExpressionStatementSyntax
+            firstStatement is not ExpressionStatementSyntax
             {
                 Expression: InvocationExpressionSyntax
                 {
@@ -127,7 +129,7 @@ public sealed class UseDictionaryTryAddAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        context.ReportDiagnostic(Diagnostic.Create(Rule, containsMember.Name.GetLocation()));
+        context.ReportIfUncaptured(Rule, containsMember.Name.GetLocation(), ifStatement);
     }
 
     private static bool IsDictionaryMethod(

@@ -6,6 +6,11 @@
     <Nullable>enable</Nullable>
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <!-- A direct pack also builds the fixer. Restore its project without adding a
+         circular ProjectReference (the fixer already references the analyzer). -->
+    <CodeFixProject>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '../HooSharper.CodeFixes/HooSharper.CodeFixes.csproj'))</CodeFixProject>
+    <RestoreGraphProjectInput Condition="'$(RestoreGraphProjectInput)' == ''">$(CodeFixProject)</RestoreGraphProjectInput>
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);CollectAnalyzerAssemblies</TargetsForTfmSpecificContentInPackage>
     <PackageId>HooSharper.Analyzers</PackageId>
     <Description>Open-source Roslyn analyzers and code fixes for productive C# development.</Description>
     <PackageTags>roslyn;analyzer;code-fix;csharp</PackageTags>
@@ -35,18 +40,23 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="$(OutputPath)$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
-    <None Include="..\HooSharper.CodeFixes\bin\$(Configuration)\netstandard2.0\HooSharper.CodeFixes.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
     <None Include="..\..\README.md" Pack="true" PackagePath="\" Link="README.md" />
     <None Include="..\..\LICENSE" Pack="true" PackagePath="\" Link="LICENSE" />
     <None Include="../../docs/assets/hoosharper-logo.png" Pack="true" PackagePath="" />
   </ItemGroup>
 
-  <Target Name="EnsureCodeFixesBuiltForPack" BeforeTargets="GenerateNuspec" Condition="'$(NoBuild)' != 'true'">
-    <MSBuild Projects="..\HooSharper.CodeFixes\HooSharper.CodeFixes.csproj"
-             Targets="Build"
-             Properties="Configuration=$(Configuration)"
-             RemoveProperties="TargetFramework" />
+  <Target Name="CollectAnalyzerAssemblies">
+    <PropertyGroup>
+      <_CodeFixTarget Condition="'$(NoBuild)' != 'true'">Build</_CodeFixTarget>
+      <_CodeFixTarget Condition="'$(NoBuild)' == 'true'">GetTargetPath</_CodeFixTarget>
+    </PropertyGroup>
+    <MSBuild Projects="$(CodeFixProject)" Targets="$(_CodeFixTarget)"
+             Properties="Configuration=$(Configuration)" RemoveProperties="TargetFramework">
+      <Output TaskParameter="TargetOutputs" ItemName="_CodeFixAssembly" />
+    </MSBuild>
+    <ItemGroup>
+      <TfmSpecificPackageFile Include="$(TargetPath);@(_CodeFixAssembly)" PackagePath="analyzers/dotnet/cs/" />
+    </ItemGroup>
   </Target>
 
   <ItemGroup>

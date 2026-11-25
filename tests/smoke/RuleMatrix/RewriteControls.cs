@@ -104,11 +104,50 @@ internal static class RewriteControls
     private static string Pick(object value) => "object";
     private static string BoxedPattern(object input) => Pick((object)!(input is string));
 
+    private static string Capture<T>(T argument,
+        [System.Runtime.CompilerServices.CallerArgumentExpression("argument")] string text = "") => text;
+
+    private static string CallerText(bool ready, string text) =>
+        Capture(ready == true) + "|" + Capture(text.IndexOf('x') >= 0) + "|" +
+        Capture<Func<bool>>(() => { if (ready) return true; return false; });
+
+    private static bool liveFlag = true;
+    private static bool ReadSnapshot(in bool snapshot)
+    {
+        liveFlag = false;
+        return snapshot;
+    }
+
+    private static string CaptureParams(bool other = false,
+        [System.Runtime.CompilerServices.CallerArgumentExpression("flags")] string text = "", params bool[] flags) => text;
+
+    private static int CountOrderedMatches()
+    {
+        var count = 0;
+        foreach (var value in new[] { double.NaN, double.NegativeInfinity, 0.0, double.PositiveInfinity })
+        {
+            if (value >= 0)
+            {
+                count++;
+            }
+        }
+        foreach (var duration in new[] { TimeSpan.MinValue, TimeSpan.Zero, TimeSpan.MaxValue })
+        {
+            if (duration >= TimeSpan.Zero)
+            {
+                count += 10;
+            }
+        }
+        return count;
+    }
+
     public static string Run()
     {
         Flag flag = default;
         return string.Join("|", Branch(false, false, false), Branch(true, false, false),
             EmbeddedElse(false), NullableDefault(true) ?? -1, NullableConversion(default),
-            NullableExpression(new Number()), Lookup(), Guard(null), Pick(!flag == false), BoxedPattern("text"));
+            NullableExpression(new Number()), Lookup(), Guard(null), Pick(!flag == false), BoxedPattern("text"),
+            CallerText(true, "x"), ReadSnapshot(liveFlag == true),
+            CaptureParams(flags: true, other: liveFlag    ==    false), CountOrderedMatches());
     }
 }

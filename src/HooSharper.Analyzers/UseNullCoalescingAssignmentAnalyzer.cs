@@ -32,10 +32,11 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
 
     private static void AnalyzeIfStatement(SyntaxNodeAnalysisContext context)
     {
-        if (TryGetCandidate((IfStatementSyntax)context.Node, context.SemanticModel,
+        var guard = (IfStatementSyntax)context.Node;
+        if (TryGetCandidate(guard, context.SemanticModel,
                 context.CancellationToken, out var diagnosticLocation))
         {
-            context.ReportDiagnostic(Diagnostic.Create(Rule, diagnosticLocation));
+            context.ReportIfUncaptured(Rule, diagnosticLocation, guard.Statement is BlockSyntax ? guard : null);
         }
     }
 
@@ -54,13 +55,12 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
         }
 
         if (ifStatement.Else is not null ||
-            ifStatement.Statement is not BlockSyntax { Statements.Count: 1 } block ||
-            block.Statements[0] is not ExpressionStatementSyntax
+            GetAssignmentStatement(ifStatement) is not
             {
                 Expression: AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.SimpleAssignmentExpression } assignment,
-            } ||
+            } statement ||
             assignment.ContainsDiagnostics || assignment.Right is RefExpressionSyntax ||
-            HooSharper.Internal.ControlFlowScopeSafety.HasExpandedScopeCollision(block, block.Statements[0]) ||
+            HooSharper.Internal.ControlFlowScopeSafety.HasExpandedScopeCollision(ifStatement.Statement, statement) ||
             HasDirective(ifStatement) ||
             HasUnpreservedComment(ifStatement.Condition))
         {
@@ -81,6 +81,10 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
             SupportsNullCoalescingAssignment(assignedOperation.Type) &&
             PreservesNullableConversion(assignedOperation.Type!, assignment, semanticModel, cancellationToken);
     }
+
+    internal static ExpressionStatementSyntax? GetAssignmentStatement(IfStatementSyntax guard) =>
+        (guard.Statement is BlockSyntax { Statements.Count: 1 } block ? block.Statements[0] : guard.Statement)
+            as ExpressionStatementSyntax;
 
     private static bool PreservesNullableConversion(
         ITypeSymbol target, AssignmentExpressionSyntax assignment, SemanticModel model, System.Threading.CancellationToken token)
@@ -170,10 +174,10 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
         }
 
         operation = semanticModel.GetOperation(expression, cancellationToken)!;
-        return operation is { Type.TypeKind: not TypeKind.Dynamic } && IsSupportedTargetOperation(operation);
+        return operation is { Type.TypeKind: not TypeKind.Dynamic } && IsSupportedTargetOperation(operation, cancellationToken);
     }
 
-    private static bool IsSupportedTargetOperation(IOperation? operation)
+    private static bool IsSupportedTargetOperation(IOperation? operation, System.Threading.CancellationToken token)
     {
         operation = Unwrap(operation);
         return operation switch
@@ -181,8 +185,33 @@ public sealed class UseNullCoalescingAssignmentAnalyzer : DiagnosticAnalyzer
             ILocalReferenceOperation => true,
             IParameterReferenceOperation => true,
             IFieldReferenceOperation field => IsStableReceiver(field.Instance),
+            IPropertyReferenceOperation property => IsStableReceiver(property.Instance) &&
+                IsOrdinaryAutoProperty(property.Property, token),
             _ => false,
         };
+    }
+
+    // Reusing the receiver is safe when the getter is a compiler-generated
+    // field read. Keep custom/overridable accessors and unknown metadata out.
+    private static bool IsOrdinaryAutoProperty(IPropertySymbol property, System.Threading.CancellationToken token)
+    {
+        if (property.IsIndexer || property.IsVirtual || property.IsOverride || property.IsAbstract || property.IsExtern ||
+            property.GetMethod is null || property.SetMethod is null || property.ContainingType.TypeKind == TypeKind.Interface ||
+            property.DeclaringSyntaxReferences.Length != 1 ||
+            property.DeclaringSyntaxReferences[0].GetSyntax(token) is not PropertyDeclarationSyntax
+            { AccessorList: { } list } declaration || declaration.Modifiers.Any(SyntaxKind.PartialKeyword))
+        {
+            return false;
+        }
+
+        foreach (var accessor in list.Accessors)
+        {
+            if (!accessor.SemicolonToken.IsKind(SyntaxKind.SemicolonToken) || accessor.SemicolonToken.IsMissing ||
+                accessor.Body is not null || accessor.ExpressionBody is not null)
+                return false;
+        }
+
+        return true;
     }
 
     private static bool IsStableReceiver(IOperation? operation)

@@ -1,5 +1,6 @@
 """Regression checks for report normalization and fixed-source provenance."""
 
+import codecs
 import hashlib
 import importlib.util
 import json
@@ -11,7 +12,7 @@ import unittest
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
-from smoke_support import validate_export
+from smoke_support import validate_export, validate_export_newlines
 
 spec = importlib.util.spec_from_file_location("comparison", Path(__file__).with_name("compare-resharper.py"))
 comparison = importlib.util.module_from_spec(spec)
@@ -22,6 +23,46 @@ spec.loader.exec_module(smoke_runner)
 
 
 class ComparisonTests(unittest.TestCase):
+    def test_fixed_export_preserves_consistent_csharp_line_endings(self):
+        for before, after, encoding, error in [
+                ("a\r\nb\r\n", "a\r\nb\nc\r\n", "utf-8", "LF"),
+                ("a\r\nb\r\n", "a\nb\n", "utf-16", "LF"),
+                ("a\rb\r", "a\rb\u0085", "utf-8", "NEL"),
+                ("a\u2028b\u2028", "a\u2028b\u2029", "utf-16", "PS"),
+                ("a\u2029b\u2029", "a\u2028b\u2029", "utf-8", "LS"),
+                ("a\nb\n", "a\rb\n", "utf-8", "CR"),
+                ("a\u0085b", "a\u0085new\u0085b", "utf-16", None),
+                ("a\r\nb\r\n", "a\r\nb\r\n", "utf-8", None),
+                ("a\r\nb\n", "a\r\nb\nnew\r", "utf-8", None),
+                ("a", "a\r\nb\r\n", "utf-8", None)]:
+            with self.subTest(before=repr(before), after=repr(after), encoding=encoding), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixed = root / "fixed"
+                fixed.mkdir()
+                path, export = root / "Source.cs", fixed / "Source.cs"
+                path.write_bytes(before.encode(encoding))
+                export.write_bytes(after.encode(encoding))
+                def digest(file):
+                    return hashlib.sha256(file.read_bytes()).hexdigest()
+                manifest = fixed / ".hoosharper-export.json"
+                manifest.write_text(json.dumps({path.name: digest(export)}))
+                report = {"project": str(root / "P.csproj"), "exportManifestSha256": digest(manifest),
+                          "sourceHashes": {path.name: comparison.source_hash(path)}, "sourceByteHashes": {path.name: digest(path)}}
+                if error:
+                    with self.assertRaisesRegex(RuntimeError, rf"Source\.cs:.*\b{error}\b"):
+                        validate_export_newlines(fixed, report)
+                else:
+                    self.assertEqual(1, validate_export_newlines(fixed, report)["filesCompared"])
+
+    def test_corpus_refuses_results_collected_with_different_fixer_assemblies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, fixer in [("modern", "original"), ("portable", "rebuilt")]:
+                (root / f"{name}-hoosharper.json").write_text(
+                    json.dumps({"analyzerSha256": "stable", "fixerSha256": fixer}))
+            with self.assertRaisesRegex(RuntimeError, "portable.*assembly changed"):
+                smoke_runner.check_assembly_hashes(root, ["modern", "portable"])
+
     def test_absolute_linked_source_matches_project_relative_source(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve() / "project"
@@ -34,7 +75,7 @@ class ComparisonTests(unittest.TestCase):
             self.assertTrue(comparison.overlaps(normalized, {"file": "../shared.cs", "line": 2, "endLine": 2}))
 
     def test_utf16_offsets_follow_all_csharp_newline_forms(self):
-        for newline in ["\n", "\r", "\r\n"]:
+        for newline in ["\n", "\r", "\r\n", "\u0085", "\u2028", "\u2029"]:
             with self.subTest(newline=newline), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 text = "// 😀" + newline + "class C {}" + newline
@@ -43,6 +84,29 @@ class ComparisonTests(unittest.TestCase):
                 issue = ET.Element("Issue", File="C.cs", Offset=f"{start}-{start + 10}", Line="1")
                 normalized = comparison.normalize_issue(issue, root)
                 self.assertEqual((2, 2), (normalized["line"], normalized["endLine"]))
+
+    def test_native_offsets_and_roslyn_hashes_agree_on_bom_encoded_sources(self):
+        text = "// 😀\r\npublic class Main\r\n{\u0085    public static bool F(bool b)\u2028    {\u2029        return b == true;\r\n    }\r\n}\r\n"
+        # Captured from InspectCode: offsets count UTF-16 units without the BOM.
+        issue = ET.Element("Issue", File="Example.cs", Offset="84-91", Line="6")
+        for encoding, bom in [("utf-8", codecs.BOM_UTF8), ("utf-16-le", codecs.BOM_UTF16_LE),
+                              ("utf-16-be", codecs.BOM_UTF16_BE), ("utf-32-le", codecs.BOM_UTF32_LE),
+                              ("utf-32-be", codecs.BOM_UTF32_BE)]:
+            with self.subTest(encoding=encoding), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                path = root / "Example.cs"
+                path.write_bytes(bom + text.encode(encoding))
+                self.assertEqual(hashlib.sha256(text.encode()).hexdigest(), comparison.source_hash(path))
+                normalized = comparison.normalize_issue(issue, root)
+                self.assertEqual((6, 6), (normalized["line"], normalized["endLine"]))
+
+    def test_native_capture_rejects_wrong_empty_and_mixed_project_reports(self):
+        hoo = {"project": "/source/P.csproj"}
+        comparison.validate_native_project(hoo, ET.fromstring("<Report><Issues/></Report>"))
+        for xml in ["<Report/>", '<Report><Issues><Project Name="Q"/></Issues></Report>',
+                    '<Report><Issues><Project Name="P"/><Project Name="Q"><Issue/></Project></Issues></Report>']:
+            with self.subTest(xml=xml), self.assertRaises(RuntimeError):
+                comparison.validate_native_project(hoo, ET.fromstring(xml))
 
     def test_native_filter_preserves_multiplicity_and_uses_inclusive_lines(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -199,8 +263,11 @@ class ComparisonTests(unittest.TestCase):
             source = root / "C.cs"
             source.write_text("class C {}")
             manifest = {"C.cs": hashlib.sha256(source.read_bytes()).hexdigest()}
-            (root / ".hoosharper-export.json").write_text(json.dumps(manifest))
-            report = {"sourceHashes": {"C.cs": "original", "../linked.cs": "external", "obj/generated.cs": "generated"}}
+            sidecar = root / ".hoosharper-export.json"
+            sidecar.write_text(json.dumps(manifest))
+            report = {"sourceHashes": {"C.cs": "original", "../linked.cs": "external", "obj/generated.cs": "generated"},
+                      "sourceByteHashes": {"C.cs": "original"},
+                      "exportManifestSha256": hashlib.sha256(sidecar.read_bytes()).hexdigest()}
             validate_export(root, report)
             (root / "stale.cs").write_text("class Stale {}")
             with self.assertRaisesRegex(RuntimeError, "unexpected"):

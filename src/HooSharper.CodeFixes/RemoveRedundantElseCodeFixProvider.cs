@@ -56,40 +56,91 @@ public sealed class RemoveRedundantElseCodeFixProvider : CodeFixProvider
             return document;
         }
 
-        var replacementStatements = CreateReplacementStatements(ifStatement, elseClause);
+        var separateBlocks = RequiresBlankLineAfterBlock(document, semanticModel, cancellationToken);
+        var replacementStatements = CreateReplacementStatements(ifStatement, elseClause, semanticModel, cancellationToken, separateBlocks);
         SyntaxNode newRoot;
 
         if (ifStatement.Parent is BlockSyntax parentBlock)
         {
             var index = parentBlock.Statements.IndexOf(ifStatement);
-            var newParentBlock = parentBlock.WithStatements(
-                    parentBlock.Statements.RemoveAt(index).InsertRange(index, replacementStatements))
-                .WithAdditionalAnnotations(Formatter.Annotation);
+            var newParentBlock = CodeFixTrivia.ReplaceWithStatements(parentBlock, index, replacementStatements);
             newRoot = root.ReplaceNode(parentBlock, newParentBlock);
         }
         else
         {
+            // The statements keep the original boundary comments. Only the
+            // line ending needs to move past the new closing brace.
             var replacementBlock = SyntaxFactory.Block(replacementStatements)
-                .WithLeadingTrivia(ifStatement.GetLeadingTrivia())
-                .WithTrailingTrivia(ifStatement.GetTrailingTrivia())
+                .WithTrailingTrivia(ifStatement.GetTrailingTrivia().Where(trivia => trivia.IsKind(SyntaxKind.EndOfLineTrivia)))
                 .WithAdditionalAnnotations(Formatter.Annotation);
             newRoot = root.ReplaceNode(ifStatement, replacementBlock);
         }
 
-        return document.WithSyntaxRoot(newRoot);
+        return await CodeFixTrivia.FormatChangesAsync(document, newRoot, cancellationToken).ConfigureAwait(false);
     }
 
     private static List<StatementSyntax> CreateReplacementStatements(
+        IfStatementSyntax ifStatement,
+        ElseClauseSyntax elseClause,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken,
+        bool separateBlocks)
+    {
+        var replacements = new List<StatementSyntax>();
+        SyntaxTriviaList? movedLeadingTrivia = null;
+        while (true)
+        {
+            var split = SplitElse(ifStatement, elseClause);
+            if (separateBlocks && split.Count > 1 && split[0].GetLastToken().IsKind(SyntaxKind.CloseBraceToken))
+                split[1] = CodeFixTrivia.WithBlankLineBefore(split[1], split[0], ifStatement);
+            replacements.Add(movedLeadingTrivia is { } moved
+                ? split[0].WithLeadingTrivia(moved)
+                : split[0]);
+            // The outer condition already passed the directive and syntax checks.
+            // Only split consecutive arms whose endpoint is unreachable.
+            if (elseClause.Statement is not IfStatementSyntax { Else: { } nextElse } nextIf ||
+                !HooSharper.Internal.ControlFlowScopeSafety.DefinitelyTerminates(nextIf.Statement, semanticModel, cancellationToken) ||
+                (ProjectStylePolicy.IsEnabled(semanticModel.Compilation.Options, ifStatement.SyntaxTree, "S1199", cancellationToken) &&
+                 HooSharper.Internal.ControlFlowScopeSafety.ElseNeedsStandaloneBlock(nextElse)))
+            {
+                replacements.AddRange(split.Skip(1));
+                return replacements;
+            }
+
+            if (split[1] is BlockSyntax scope)
+            {
+                // Keep pattern/out variables inside the scope chosen by SplitElse.
+                var scopedStatements = CreateReplacementStatements(nextIf, nextElse, semanticModel, cancellationToken, separateBlocks);
+                replacements.Add(scope.WithStatements(SyntaxFactory.List(scopedStatements)));
+                return replacements;
+            }
+
+            movedLeadingTrivia = split[1].GetLeadingTrivia();
+            ifStatement = nextIf;
+            elseClause = nextElse;
+        }
+    }
+
+    private static bool RequiresBlankLineAfterBlock(Document document, SemanticModel model, CancellationToken token)
+    {
+        var tree = model.SyntaxTree;
+        var config = document.Project.AnalyzerOptions.AnalyzerConfigOptionsProvider.GetOptions(tree);
+        if (config.TryGetValue("csharp_style_allow_statement_immediately_after_block_experimental", out var style) &&
+            bool.TryParse(style.Split(':')[0].Trim(), out var allow) && !allow)
+            return true;
+
+        return ProjectStylePolicy.IsEnabled(model.Compilation.Options, tree, "SA1513", token);
+    }
+
+    private static List<StatementSyntax> SplitElse(
         IfStatementSyntax ifStatement,
         ElseClauseSyntax elseClause)
     {
         var statementWithoutElse = ifStatement.WithElse(null)
             .WithAdditionalAnnotations(Formatter.Annotation);
 
-        if (elseClause.Statement is BlockSyntax scopedBlock &&
-            (RequiresPreservedScope(scopedBlock) || scopedBlock.Statements.Count == 0 &&
-             elseClause.DescendantTrivia().Any(item =>
-                 !item.IsKind(SyntaxKind.WhitespaceTrivia) && !item.IsKind(SyntaxKind.EndOfLineTrivia))))
+        var preserveScope = HooSharper.Internal.ControlFlowScopeSafety.ElseNeedsStandaloneBlock(elseClause);
+        if (elseClause.Statement is BlockSyntax scopedBlock && preserveScope)
         {
             var elseTrivia = SignificantTrivia(elseClause.ElseKeyword.LeadingTrivia)
                 .AddRange(SignificantTrivia(elseClause.ElseKeyword.TrailingTrivia));
@@ -103,7 +154,7 @@ public sealed class RemoveRedundantElseCodeFixProvider : CodeFixProvider
 
         // An unbraced embedded statement also has its own declaration scope.
         // Keep it when moving an out or pattern variable into the parent block.
-        if (elseClause.Statement is not BlockSyntax && RequiresPreservedScope(elseClause.Statement))
+        if (elseClause.Statement is not BlockSyntax && preserveScope)
         {
             var trivia = SignificantTrivia(elseClause.ElseKeyword.LeadingTrivia)
                 .AddRange(SignificantTrivia(elseClause.ElseKeyword.TrailingTrivia));
@@ -149,20 +200,6 @@ public sealed class RemoveRedundantElseCodeFixProvider : CodeFixProvider
         var replacements = new List<StatementSyntax>(movedStatements.Count + 1) { statementWithoutElse };
         replacements.AddRange(movedStatements);
         return replacements;
-    }
-
-    private static bool RequiresPreservedScope(StatementSyntax statement)
-    {
-        foreach (var node in statement.DescendantNodesAndSelf())
-        {
-            if (node is LocalDeclarationStatementSyntax or LocalFunctionStatementSyntax or
-                DeclarationExpressionSyntax or SingleVariableDesignationSyntax or LabeledStatementSyntax)
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static SyntaxTriviaList SignificantTrivia(SyntaxTriviaList trivia) =>
