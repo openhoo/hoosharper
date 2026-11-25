@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.14 (2026-11-25)
+
+### Bug Fixes
+
+- **analyzers:** preserve program behavior and source in batch fixes (6b55251)
+
 ## 0.3.13 (2026-11-17)
 
 ### Bug Fixes

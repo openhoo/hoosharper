@@ -46,7 +46,7 @@ The analyzer package targets `netstandard2.0` and is compiled against Roslyn 4.8
 Install the package directly from [nuget.org](https://www.nuget.org/packages/HooSharper.Analyzers):
 
 ```bash
-dotnet add package HooSharper.Analyzers --version 0.3.13
+dotnet add package HooSharper.Analyzers --version 0.3.14
 ```
 
 For central package management, add the version to `Directory.Packages.props`:
@@ -54,7 +54,7 @@ For central package management, add the version to `Directory.Packages.props`:
 ```xml
 <Project>
   <ItemGroup>
-    <PackageVersion Include="HooSharper.Analyzers" Version="0.3.13" />
+    <PackageVersion Include="HooSharper.Analyzers" Version="0.3.14" />
   </ItemGroup>
 </Project>
 ```
@@ -72,7 +72,7 @@ Without central package management:
 ```xml
 <ItemGroup>
   <PackageReference Include="HooSharper.Analyzers"
-                    Version="0.3.13"
+                    Version="0.3.14"
                     PrivateAssets="all" />
 </ItemGroup>
 ```
@@ -96,7 +96,7 @@ dotnet nuget add source /absolute/path/to/hoosharper/artifacts \
   --name HooSharperLocal
 
 dotnet add package HooSharper.Analyzers \
-  --version 0.3.13 \
+  --version 0.3.14 \
   --source /absolute/path/to/hoosharper/artifacts
 ```
 
